@@ -1,12 +1,12 @@
 --- === WhisperDictation ===
 ---
 --- Toggle local Whisper-based dictation with menubar indicator.
---- Records from mic via `sox`, transcribes via whisper-cli, copies text to clipboard.
+--- Records from mic via `sox`, transcribes via whisperkit-cli, copies text to clipboard.
 ---
 --- Features:
 --- • Dynamic filename with timestamp
 --- • Elapsed time indicator in menubar during recording
---- • Multiple languages (--language option to whisper-cli)
+--- • Multiple languages (--language option to whisperkit-cli)
 --- • Clipboard copy and character count summary
 ---
 --- Usage:
@@ -20,8 +20,7 @@
 --
 -- Requirements:
 --      sox
---      whisper-cli
---      a local model for whisper-cli
+--      whisperkit-cli
 
 local obj = {}
 obj.__index = obj
@@ -34,7 +33,6 @@ obj.license = "MIT"
 -- === Config ===
 obj.model = "large-v3"
 obj.tempDir = "/tmp/whisper_dict"
-obj.transcriptFile = obj.tempDir .. "/transcript"
 obj.recordCmd = "/opt/homebrew/bin/sox"
 obj.whisperCmd = "/opt/homebrew/bin/whisperkit-cli"
 obj.languages = {"en"}
