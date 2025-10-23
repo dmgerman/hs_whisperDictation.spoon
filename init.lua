@@ -31,10 +31,8 @@ obj.version = "0.9"
 obj.author = "dmg"
 obj.license = "MIT"
 
-local obj = {}
-obj.__index = obj
-
 -- === Config ===
+obj.logger = Logger.new()
 obj.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
 obj.tempDir = "/tmp/whisper_dict"
 obj.transcriptFile = obj.tempDir .. "/transcript"
@@ -46,6 +44,90 @@ obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
 }
+
+-- === Logger ===
+local Logger = {}
+Logger.__index = Logger
+
+function Logger.new()
+  local self = setmetatable({}, Logger)
+  self.logFile = os.getenv("HOME") .. "/.hammerspoon/Spoons/hs_whisperDictation/whisper.log"
+  self.levels = {
+    DEBUG = 0,
+    INFO = 1,
+    WARN = 2,
+    ERROR = 3,
+  }
+  self.levelNames = {
+    [0] = "DEBUG",
+    [1] = "INFO",
+    [2] = "WARN",
+    [3] = "ERROR",
+  }
+  self.currentLevel = self.levels.INFO
+  self.enableConsole = true
+  self.enableFile = false
+  return self
+end
+
+function Logger:_formatMessage(level, msg)
+  local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+  local levelName = self.levelNames[level]
+  return string.format("[%s] [%s] %s", timestamp, levelName, msg)
+end
+
+function Logger:_writeToFile(formatted)
+  local ok, f = pcall(io.open, self.logFile, "a")
+  if ok and f then
+    f:write(formatted .. "\n")
+    f:close()
+  end
+end
+
+function Logger:_log(level, msg, showAlert)
+  if level < self.currentLevel then
+    return
+  end
+
+  local formatted = self:_formatMessage(level, msg)
+
+  if self.enableConsole then
+    print("[WhisperDictation] " .. formatted)
+  end
+
+  if self.enableFile then
+    self:_writeToFile(formatted)
+  end
+
+  if showAlert then
+    local icon = level == self.levels.ERROR and "❌" or "ℹ️"
+    hs.alert.show(icon .. " " .. msg)
+  end
+end
+
+function Logger:debug(msg)
+  self:_log(self.levels.DEBUG, msg, false)
+end
+
+function Logger:info(msg, showAlert)
+  self:_log(self.levels.INFO, msg, showAlert or false)
+end
+
+function Logger:warn(msg, showAlert)
+  self:_log(self.levels.WARN, msg, showAlert or true)
+end
+
+function Logger:error(msg, showAlert)
+  self:_log(self.levels.ERROR, msg, showAlert or true)
+end
+
+function Logger:setLevel(level)
+  if self.levels[level] then
+    self.currentLevel = self.levels[level]
+  end
+end
+
+
 
 -- === Internal ===
 obj.recTask = nil
@@ -97,48 +179,36 @@ local function stopElapsedTimer()
   obj.startTime = nil
 end
 
--- Utility method: show alert and print to console
-function obj:message(msg, isError)
-  if isError then
-    hs.alert.show("❌ " .. msg)
-    print("[WhisperDictation][ERROR] " .. msg)
-  else
-    hs.alert.show(msg)
-    print("[WhisperDictation] " .. msg)
-  end
-end
 
 
 local function transcribe(audioFile)
-  obj:message("⏳ Transcribing (" .. currentLang() .. ")...")
+  obj.logger:info("⏳ Transcribing (" .. currentLang() .. ")...", true)
   updateMenu("💤", "Idle")
-
-  -- Sanity checks
 
   local args = {
     "--model", obj.modelPath,
     "--file", audioFile,
-    "--output-txt", 
+    "--output-txt",
     "--output-file", obj.transcriptFile,
     "--language", currentLang(),
   }
 
-  print("[WhisperDictation] Running command:", obj.whisperCmd, table.concat(args, " "))
+  obj.logger:debug("Running command: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
 
   local task = hs.task.new(obj.whisperCmd, function(exitCode, stdOut, stdErr)
-    print("[WhisperDictation] whisper-cli exit code:", exitCode)
+    obj.logger:debug("whisper-cli exit code: " .. tostring(exitCode))
     if stdErr and #stdErr > 0 then
-      print("[WhisperDictation] stderr:\n" .. stdErr)
+      obj.logger:warn("whisper-cli stderr:\n" .. stdErr)
     end
 
     if exitCode ~= 0 then
-      obj:message("whisper-cli failed (exit " .. tostring(exitCode) .. ")", true)
+      obj.logger:error("whisper-cli failed (exit " .. tostring(exitCode) .. ")", true)
       return
     end
 
     local f, err = io.open(obj.transcriptFile .. ".txt", "r")
     if not f then
-      obj:message("Could not open transcript file: " .. tostring(err), true)
+      obj.logger:error("Could not open transcript file: " .. tostring(err), true)
       return
     end
 
@@ -146,27 +216,27 @@ local function transcribe(audioFile)
     f:close()
 
     if text == "" then
-      obj:message("Empty transcript output", true)
+      obj.logger:error("Empty transcript output", true)
       return
     end
 
     local ok, errPB = pcall(hs.pasteboard.setContents, text)
     if not ok then
-      obj:message("Failed to copy to clipboard: " .. tostring(errPB), true)
+      obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
       return
     end
 
-    obj:message("📋 Copied to clipboard (" .. #text .. " chars)")
+    obj.logger:info("📋 Copied to clipboard (" .. #text .. " chars)", true)
   end, args)
 
   if not task then
-    obj:message("Failed to create hs.task for whisper-cli", true)
+    obj.logger:error("Failed to create hs.task for whisper-cli", true)
     return
   end
 
   local ok, err = pcall(function() task:start() end)
   if not ok then
-    obj:message("Failed to start whisper-cli: " .. tostring(err), true)
+    obj.logger:error("Failed to start whisper-cli: " .. tostring(err), true)
   end
 end
 
@@ -174,18 +244,20 @@ local function toggleRecord()
   if obj.recTask == nil then
     ensureDir(obj.tempDir)
     local audioFile = timestampedFile(obj.tempDir, currentLang(), "wav")
-    hs.alert.show("🎙️ Recording (" .. currentLang() .. ")")
+    obj.logger:info("🎙️ Recording started (" .. currentLang() .. ")", true)
+    obj.logger:debug("Recording to file: " .. audioFile)
     obj.recTask = hs.task.new(obj.recordCmd, nil, {"-d", audioFile})
     obj.recTask:start()
     obj.currentAudioFile = audioFile
     startElapsedTimer()
   else
-    hs.alert.show("🛑 Stopped")
+    obj.logger:info("🛑 Recording stopped")
     obj.recTask:terminate()
     obj.recTask = nil
     stopElapsedTimer()
     updateMenu("💤", "Idle (" .. currentLang() .. ")")
     if obj.currentAudioFile then
+      obj.logger:info("Processing audio file: " .. obj.currentAudioFile)
       transcribe(obj.currentAudioFile)
       obj.currentAudioFile = nil
     end
@@ -195,39 +267,41 @@ end
 local function nextLanguage()
   obj.langIndex = (obj.langIndex % #obj.languages) + 1
   local lang = currentLang()
-  hs.alert.show("🌐 Language: " .. lang)
+  obj.logger:info("🌐 Language switched to: " .. lang, true)
   updateMenu("💤", "Idle (" .. lang .. ")")
 end
 
 -- === Public API ===
 function obj:start()
-  errorSuffix = " whisperDictation not started"
+  obj.logger:info("Starting WhisperDictation")
+  local errorSuffix = " whisperDictation not started"
   if not hs.fs.attributes(obj.modelPath) then
-    obj:message("Model not found: " .. obj.modelPath .. errorSuffix, true)
+    obj.logger:error("Model not found: " .. obj.modelPath .. errorSuffix, true)
     return
   end
 
   if not hs.fs.attributes(obj.whisperCmd) then
-    obj:message("whisper-cli not found: " .. obj.whisperCmd .. errorSuffix, true)
+    obj.logger:error("whisper-cli not found: " .. obj.whisperCmd .. errorSuffix, true)
     return
   end
   if not hs.fs.attributes(obj.recordCmd) then
-    obj:message("recording command not found: " .. obj.recordCmd .. errorSuffix, true)
+    obj.logger:error("recording command not found: " .. obj.recordCmd .. errorSuffix, true)
     return
   end
 
   ensureDir(obj.tempDir)
-  
+
   if not obj.menubar then
     obj.menubar = hs.menubar.new()
     obj.menubar:setClickCallback(toggleRecord)
   end
 
   updateMenu("💤", "Idle (" .. currentLang() .. ")")
-  hs.alert.show("WhisperDictation ready (" .. currentLang() .. ")")
+  obj.logger:info("WhisperDictation ready (" .. currentLang() .. ")", true)
 end
 
 function obj:stop()
+  obj.logger:info("Stopping WhisperDictation")
   if obj.menubar then
     obj.menubar:delete()
     obj.menubar = nil
@@ -239,17 +313,20 @@ function obj:stop()
     obj.recTask = nil
   end
   stopElapsedTimer()
-  hs.alert.show("WhisperDictation stopped")
+  obj.logger:info("WhisperDictation stopped", true)
 end
 
 function obj:bindHotKeys(mapping)
+  obj.logger:debug("Binding hotkeys")
   local map = hs.fnutils.copy(mapping or obj.defaultHotkeys)
   for name, spec in pairs(map) do
     if obj.hotkeys[name] then obj.hotkeys[name]:delete() end
     if name == "toggle" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], toggleRecord)
+      obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], nextLanguage)
+      obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self
