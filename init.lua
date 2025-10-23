@@ -32,12 +32,11 @@ obj.author = "dmg"
 obj.license = "MIT"
 
 -- === Config ===
-obj.logger = Logger.new()
-obj.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+obj.model = "large-v3"
 obj.tempDir = "/tmp/whisper_dict"
 obj.transcriptFile = obj.tempDir .. "/transcript"
 obj.recordCmd = "/opt/homebrew/bin/sox"
-obj.whisperCmd = "/opt/homebrew/bin/whisper-cli"
+obj.whisperCmd = "/opt/homebrew/bin/whisperkit-cli"
 obj.languages = {"en"}
 obj.langIndex = 1
 obj.defaultHotkeys = {
@@ -130,6 +129,8 @@ end
 
 
 -- === Internal ===
+obj.logger = Logger.new()
+
 obj.recTask = nil
 obj.menubar = nil
 obj.hotkeys = {}
@@ -186,39 +187,42 @@ local function transcribe(audioFile)
   updateMenu("💤", "Idle")
 
   local args = {
-    "--model", obj.modelPath,
-    "--file", audioFile,
-    "--output-txt",
-    "--output-file", obj.transcriptFile,
-    "--language", currentLang(),
+    "transcribe",
+    "--model=" .. obj.model,
+    "--audio-path=" .. audioFile,
+    "--language=" .. currentLang(),
   }
 
   obj.logger:debug("Running command: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
 
   local task = hs.task.new(obj.whisperCmd, function(exitCode, stdOut, stdErr)
-    obj.logger:debug("whisper-cli exit code: " .. tostring(exitCode))
+    obj.logger:debug("whisperkit-cli exit code: " .. tostring(exitCode))
     if stdErr and #stdErr > 0 then
-      obj.logger:warn("whisper-cli stderr:\n" .. stdErr)
+      obj.logger:warn("whisperkit-cli stderr:\n" .. stdErr)
     end
 
     if exitCode ~= 0 then
-      obj.logger:error("whisper-cli failed (exit " .. tostring(exitCode) .. ")", true)
+      obj.logger:error("whisperkit-cli failed (exit " .. tostring(exitCode) .. ")", true)
       return
     end
 
-    local f, err = io.open(obj.transcriptFile .. ".txt", "r")
-    if not f then
-      obj.logger:error("Could not open transcript file: " .. tostring(err), true)
-      return
-    end
-
-    local text = f:read("*a") or ""
-    f:close()
-
+    local text = stdOut or ""
     if text == "" then
       obj.logger:error("Empty transcript output", true)
       return
     end
+
+    -- Write transcript to file with same name but .txt extension
+    local outputFile = audioFile:gsub("%.wav$", ".txt")
+    local f, err = io.open(outputFile, "w")
+    if not f then
+      obj.logger:error("Could not open transcript file for writing: " .. tostring(err), true)
+      return
+    end
+
+    f:write(text)
+    f:close()
+    obj.logger:debug("Transcript written to file: " .. outputFile)
 
     local ok, errPB = pcall(hs.pasteboard.setContents, text)
     if not ok then
@@ -230,13 +234,13 @@ local function transcribe(audioFile)
   end, args)
 
   if not task then
-    obj.logger:error("Failed to create hs.task for whisper-cli", true)
+    obj.logger:error("Failed to create hs.task for whisperkit-cli", true)
     return
   end
 
   local ok, err = pcall(function() task:start() end)
   if not ok then
-    obj.logger:error("Failed to start whisper-cli: " .. tostring(err), true)
+    obj.logger:error("Failed to start whisperkit-cli: " .. tostring(err), true)
   end
 end
 
@@ -275,13 +279,8 @@ end
 function obj:start()
   obj.logger:info("Starting WhisperDictation")
   local errorSuffix = " whisperDictation not started"
-  if not hs.fs.attributes(obj.modelPath) then
-    obj.logger:error("Model not found: " .. obj.modelPath .. errorSuffix, true)
-    return
-  end
-
   if not hs.fs.attributes(obj.whisperCmd) then
-    obj.logger:error("whisper-cli not found: " .. obj.whisperCmd .. errorSuffix, true)
+    obj.logger:error("whisperkit-cli not found: " .. obj.whisperCmd .. errorSuffix, true)
     return
   end
   if not hs.fs.attributes(obj.recordCmd) then
