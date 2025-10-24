@@ -115,7 +115,7 @@ wd.logger:setLevel("DEBUG")
 
 ** Starting Recording
 
-Click the menubar icon (💤) or press your configured toggle hotkey (default: Ctrl+Cmd+D).
+Click the menubar icon (🎤) or press your configured toggle hotkey (default: Ctrl+Cmd+D).
 
 The menubar will update to show:
 - 🎙️ Recording indicator

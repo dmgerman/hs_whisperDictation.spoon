@@ -182,7 +182,7 @@ end
 
 local function transcribe(audioFile)
   obj.logger:info("⏳ Transcribing (" .. currentLang() .. ")...", true)
-  updateMenu("💤", "Idle")
+  updateMenu("🎤", "Idle")
 
   local args = {
     "transcribe",
@@ -257,7 +257,7 @@ local function toggleRecord()
     obj.recTask:terminate()
     obj.recTask = nil
     stopElapsedTimer()
-    updateMenu("💤", "Idle (" .. currentLang() .. ")")
+    updateMenu("🎤", "Idle (" .. currentLang() .. ")")
     if obj.currentAudioFile then
       obj.logger:info("Processing audio file: " .. obj.currentAudioFile)
       transcribe(obj.currentAudioFile)
@@ -270,7 +270,7 @@ local function nextLanguage()
   obj.langIndex = (obj.langIndex % #obj.languages) + 1
   local lang = currentLang()
   obj.logger:info("🌐 Language switched to: " .. lang, true)
-  updateMenu("💤", "Idle (" .. lang .. ")")
+  updateMenu("🎤", "Idle (" .. lang .. ")")
 end
 
 -- === Public API ===
@@ -293,7 +293,7 @@ function obj:start()
     obj.menubar:setClickCallback(toggleRecord)
   end
 
-  updateMenu("💤", "Idle (" .. currentLang() .. ")")
+  updateMenu("🎤", "Idle (" .. currentLang() .. ")")
   obj.logger:info("WhisperDictation ready (" .. currentLang() .. ")", true)
 end
 
