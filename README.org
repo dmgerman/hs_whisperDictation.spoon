@@ -55,7 +55,7 @@ Before using WhisperDictation, ensure you have the following installed:
    wd:start()
    #+end_src
 
-3. Reload Hammerspoon configuration (⌘ + Shift + L)
+3. Reload Hammerspoon configuration
 
 ** Customizable Properties
 
