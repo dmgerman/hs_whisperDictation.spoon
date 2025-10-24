@@ -7,7 +7,7 @@
 
 WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that provides local, offline voice dictation powered by [[https://openai.com/research/whisper][OpenAI's Whisper]] model.
 
-It records audio from your microphone, transcribes it using =whisperkit-cli=, and automatically copies the transcribed text to your clipboard. Processing is done asynchronously, allowing you to continue working while transcription happens in the background. A menubar indicator shows recording status and elapsed time.
+It records audio from your microphone and transcribes it using =whisperkit-cli=, then automatically copies the transcribed text to your clipboard. Both recording and transcription happen asynchronously, allowing you to continue working without interruption. A menubar indicator shows recording status and elapsed time.
 
 ** Key Features
 
@@ -126,7 +126,7 @@ The menubar will update to show:
 
 Click the menubar icon again or press the toggle hotkey.
 
-The audio is automatically transcribed, and the text is copied to your clipboard.
+The audio is automatically transcribed asynchronously in the background, and the text is copied to your clipboard once transcription completes. You can continue working while transcription happens without waiting for it to finish.
 
 ** Switching Languages
 
