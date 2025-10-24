@@ -7,13 +7,14 @@
 
 WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that provides local, offline voice dictation powered by [[https://openai.com/research/whisper][OpenAI's Whisper]] model.
 
-It records audio from your microphone, transcribes it using =whisperkit-cli=, and automatically copies the transcribed text to your clipboard. A menubar indicator shows recording status and elapsed time.
+It records audio from your microphone, transcribes it using =whisperkit-cli=, and automatically copies the transcribed text to your clipboard. Processing is done asynchronously, allowing you to continue working while transcription happens in the background. A menubar indicator shows recording status and elapsed time.
 
 ** Key Features
 
 - 🎙️ Local voice-to-text transcription (no cloud required)
 - 🌐 Multi-language support (English, Japanese, Spanish, French, etc.)
 - 📋 Automatic clipboard copy with character count
+- ⚡ Asynchronous processing - continue working while transcription happens in the background
 - ⏱️ Elapsed time indicator during recording
 - 🔍 Structured logging with file and console output
 - ⌨️ Customizable hotkeys
@@ -45,11 +46,13 @@ Before using WhisperDictation, ensure you have the following installed:
 2. Add to your Hammerspoon config (~/.hammerspoon/init.lua):
    #+begin_src lua
    wd = hs.loadSpoon("hs_whisperDictation")
-   wd:start()
+   wd.model = "large-v3"
+   wd.languages = {"en", "ja", "es", "fr"}
    wd:bindHotKeys({
        toggle = {{"ctrl", "cmd"}, "d"},
        nextLang = {{"ctrl", "cmd"}, "l"},
    })
+   wd:start()
    #+end_src
 
 3. Reload Hammerspoon configuration (⌘ + Shift + L)
