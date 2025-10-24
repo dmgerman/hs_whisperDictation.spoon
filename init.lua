@@ -249,7 +249,7 @@ local function transcribe(audioFile)
     "--language=" .. currentLang(),
   }
 
-  obj.logger:debug("Running command: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
+  obj.logger:info("Running: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
 
   local task = hs.task.new(obj.whisperCmd, function(exitCode, stdOut, stdErr)
     handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
@@ -272,10 +272,24 @@ local function toggleRecord()
   if obj.recTask == nil then
     ensureDir(obj.tempDir)
     local audioFile = timestampedFile(obj.tempDir, currentLang(), "wav")
-    obj.logger:info(obj.icons.recording .. " Recording started (" .. currentLang() .. ")", true)
-    obj.logger:debug("Recording to file: " .. audioFile)
+    obj.logger:info(obj.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
+    obj.logger:info("Running: " .. obj.recordCmd .. " -d " .. audioFile)
     obj.recTask = hs.task.new(obj.recordCmd, nil, {"-d", audioFile})
-    obj.recTask:start()
+
+    if not obj.recTask then
+      obj.logger:error("Failed to create recording task", true)
+      resetMenuToIdle()
+      return
+    end
+
+    local ok, err = pcall(function() obj.recTask:start() end)
+    if not ok then
+      obj.logger:error("Failed to start recording: " .. tostring(err), true)
+      obj.recTask = nil
+      resetMenuToIdle()
+      return
+    end
+
     obj.currentAudioFile = audioFile
     startElapsedTimer()
   else
@@ -285,6 +299,11 @@ local function toggleRecord()
     stopElapsedTimer()
     resetMenuToIdle()
     if obj.currentAudioFile then
+      if not hs.fs.attributes(obj.currentAudioFile) then
+        obj.logger:error("Recording file was not created: " .. obj.currentAudioFile, true)
+        obj.currentAudioFile = nil
+        return
+      end
       obj.logger:info("Processing audio file: " .. obj.currentAudioFile)
       transcribe(obj.currentAudioFile)
       obj.currentAudioFile = nil
