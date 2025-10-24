@@ -1,6 +1,6 @@
 #+title: WhisperDictation Spoon
 #+author: dmg
-#+date: 2024
+#+date: 2025
 #+language: en
 
 * Overview
@@ -96,7 +96,7 @@ Define custom hotkeys using the =bindHotKeys()= method:
 #+begin_src lua
 wd:bindHotKeys({
     toggle = {{"ctrl", "cmd"}, "d"},      -- Start/stop recording
-    nextLang = {{"ctrl", "cmd"}, "l"},    -- Switch to next language
+    nextLang = {{"ctrl", "cmd"}, "l"},    -- Open language chooser
 })
 #+end_src
 
@@ -130,7 +130,7 @@ The audio is automatically transcribed asynchronously in the background, and the
 
 ** Switching Languages
 
-Press your language switch hotkey (default: Ctrl+Cmd+L) to cycle through configured languages.
+Press your language switch hotkey (default: Ctrl+Cmd+L) to open a language chooser menu displaying all available languages. The currently active language is marked with a "✓ Selected" indicator.
 
 The menubar will update to show the new language code.
 

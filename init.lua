@@ -157,6 +157,10 @@ local function updateMenu(title, tip)
   end
 end
 
+local function resetMenuToIdle()
+  updateMenu("🎤 (" .. currentLang() .. ")", "Idle")
+end
+
 local function updateElapsed()
   if obj.startTime then
     local elapsed = os.difftime(os.time(), obj.startTime)
@@ -182,7 +186,7 @@ end
 
 local function transcribe(audioFile)
   obj.logger:info("⏳ Transcribing (" .. currentLang() .. ")...", true)
-  updateMenu("🎤", "Idle")
+  updateMenu("🎤 (" .. currentLang() .. " T)", "Transcribing...")
 
   local args = {
     "transcribe",
@@ -201,12 +205,14 @@ local function transcribe(audioFile)
 
     if exitCode ~= 0 then
       obj.logger:error("whisperkit-cli failed (exit " .. tostring(exitCode) .. ")", true)
+      resetMenuToIdle()
       return
     end
 
     local text = stdOut or ""
     if text == "" then
       obj.logger:error("Empty transcript output", true)
+      resetMenuToIdle()
       return
     end
 
@@ -215,6 +221,7 @@ local function transcribe(audioFile)
     local f, err = io.open(outputFile, "w")
     if not f then
       obj.logger:error("Could not open transcript file for writing: " .. tostring(err), true)
+      resetMenuToIdle()
       return
     end
 
@@ -225,6 +232,7 @@ local function transcribe(audioFile)
     local ok, errPB = pcall(hs.pasteboard.setContents, text)
     if not ok then
       obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
+      resetMenuToIdle()
       return
     end
 
@@ -233,12 +241,14 @@ local function transcribe(audioFile)
 
   if not task then
     obj.logger:error("Failed to create hs.task for whisperkit-cli", true)
+    resetMenuToIdle()
     return
   end
 
   local ok, err = pcall(function() task:start() end)
   if not ok then
     obj.logger:error("Failed to start whisperkit-cli: " .. tostring(err), true)
+    resetMenuToIdle()
   end
 end
 
@@ -257,7 +267,7 @@ local function toggleRecord()
     obj.recTask:terminate()
     obj.recTask = nil
     stopElapsedTimer()
-    updateMenu("🎤", "Idle (" .. currentLang() .. ")")
+    resetMenuToIdle()
     if obj.currentAudioFile then
       obj.logger:info("Processing audio file: " .. obj.currentAudioFile)
       transcribe(obj.currentAudioFile)
@@ -266,11 +276,28 @@ local function toggleRecord()
   end
 end
 
-local function nextLanguage()
-  obj.langIndex = (obj.langIndex % #obj.languages) + 1
-  local lang = currentLang()
-  obj.logger:info("🌐 Language switched to: " .. lang, true)
-  updateMenu("🎤", "Idle (" .. lang .. ")")
+local function showLanguageChooser()
+  local choices = {}
+  for i, lang in ipairs(obj.languages) do
+    table.insert(choices, {
+      text = lang,
+      subText = (i == obj.langIndex and "✓ Selected" or ""),
+      lang = lang,
+      index = i,
+    })
+  end
+
+  local chooser = hs.chooser.new(function(choice)
+    if choice then
+      obj.langIndex = choice.index
+      obj.logger:info("🌐 Language switched to: " .. choice.lang, true)
+      resetMenuToIdle()
+    end
+  end)
+
+  chooser:width(0.2)
+  chooser:choices(choices)
+  chooser:show()
 end
 
 -- === Public API ===
@@ -293,7 +320,7 @@ function obj:start()
     obj.menubar:setClickCallback(toggleRecord)
   end
 
-  updateMenu("🎤", "Idle (" .. currentLang() .. ")")
+  resetMenuToIdle()
   obj.logger:info("WhisperDictation ready (" .. currentLang() .. ")", true)
 end
 
@@ -322,7 +349,7 @@ function obj:bindHotKeys(mapping)
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], toggleRecord)
       obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "nextLang" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], nextLanguage)
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
