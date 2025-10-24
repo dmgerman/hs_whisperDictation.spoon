@@ -1,0 +1,240 @@
+#+title: WhisperDictation Spoon
+#+author: dmg
+#+date: 2024
+#+language: en
+
+* Overview
+
+WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that provides local, offline voice dictation powered by [[https://openai.com/research/whisper][OpenAI's Whisper]] model.
+
+It records audio from your microphone, transcribes it using =whisperkit-cli=, and automatically copies the transcribed text to your clipboard. A menubar indicator shows recording status and elapsed time.
+
+** Key Features
+
+- 🎙️ Local voice-to-text transcription (no cloud required)
+- 🌐 Multi-language support (English, Japanese, Spanish, French, etc.)
+- 📋 Automatic clipboard copy with character count
+- ⏱️ Elapsed time indicator during recording
+- 🔍 Structured logging with file and console output
+- ⌨️ Customizable hotkeys
+- 💾 Transcript files saved alongside audio
+
+* Requirements
+
+Before using WhisperDictation, ensure you have the following installed:
+
+** Dependencies
+
+1. [[https://sox.sourceforge.net/][sox]] - Audio recording tool
+   #+begin_src bash
+   brew install sox
+   #+end_src
+
+2. [[https://github.com/argmaxinc/whisperkit-cli][whisperkit-cli]] - Whisper transcription CLI
+   #+begin_src bash
+   brew install whisperkit-cli
+   #+end_src
+
+* Installation
+
+1. Clone or download the Spoon into your Hammerspoon Spoons directory:
+   #+begin_src bash
+   ~/.hammerspoon/Spoons/hs_whisperDictation.spoon/
+   #+end_src
+
+2. Add to your Hammerspoon config (~/.hammerspoon/init.lua):
+   #+begin_src lua
+   wd = hs.loadSpoon("hs_whisperDictation")
+   wd:start()
+   wd:bindHotKeys({
+       toggle = {{"ctrl", "cmd"}, "d"},
+       nextLang = {{"ctrl", "cmd"}, "l"},
+   })
+   #+end_src
+
+3. Reload Hammerspoon configuration (⌘ + Shift + L)
+
+** Customizable Properties
+
+| Property   | Type   | Default                            | Description                   |
+|------------+--------+------------------------------------+-------------------------------|
+| =model=      | string | "large-v3"                         | Whisper model size            |
+| =tempDir=    | string | "/tmp/whisper_dict"                | Temp directory for recordings |
+| =recordCmd=  | string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
+| =whisperCmd= | string | "/opt/homebrew/bin/whisperkit-cli" | Path to whisperkit-cli binary |
+| =languages=  | table  | {"en"}                             | List of supported languages   |
+
+** Hotkey Binding
+
+Define custom hotkeys using the =bindHotKeys()= method:
+
+#+begin_src lua
+wd:bindHotKeys({
+    toggle = {{"ctrl", "cmd"}, "d"},      -- Start/stop recording
+    nextLang = {{"ctrl", "cmd"}, "l"},    -- Switch to next language
+})
+#+end_src
+
+** Logging Configuration
+
+#+begin_src lua
+-- Enable file logging, disabled by default
+wd.logger.enableFile = true
+wd.logger.logFile = os.getenv("HOME") .. "/.hammerspoon/Spoons/hs_whisperDictation/whisper.log"
+
+-- Set log level (DEBUG, INFO, WARN, ERROR)
+wd.logger:setLevel("DEBUG")
+#+end_src
+
+* Usage
+
+** Starting Recording
+
+Click the menubar icon (💤) or press your configured toggle hotkey (default: Ctrl+Cmd+D).
+
+The menubar will update to show:
+- 🎙️ Recording indicator
+- Elapsed time in seconds
+- Current language code
+
+** Stopping Recording
+
+Click the menubar icon again or press the toggle hotkey.
+
+The audio is automatically transcribed, and the text is copied to your clipboard.
+
+** Switching Languages
+
+Press your language switch hotkey (default: Ctrl+Cmd+L) to cycle through configured languages.
+
+The menubar will update to show the new language code.
+
+** Files Generated
+
+Recordings and transcripts are stored in =tempDir=:
+
+#+begin_src
+/tmp/whisper_dict/
+├── en-20240101-120000.wav    # Audio file
+├── en-20240101-120000.txt    # Transcript
+└── ...
+#+end_src
+
+* API Reference
+
+** Methods
+
+*** =start()=
+Initializes the Spoon and sets up the menubar.
+
+#+begin_src lua
+wd:start()
+#+end_src
+
+*** =stop()=
+Stops the Spoon, cleans up resources, and removes the menubar.
+
+#+begin_src lua
+wd:stop()
+#+end_src
+
+*** =bindHotKeys(mapping)=
+Binds hotkeys for controlling the Spoon.
+
+#+begin_src lua
+wd:bindHotKeys({
+    toggle = {{"ctrl", "cmd"}, "d"},
+    nextLang = {{"ctrl", "cmd"}, "l"},
+})
+#+end_src
+
+** Logger Methods
+
+The Spoon includes a custom logger accessible via =obj.logger=:
+
+- =logger:debug(msg)= - Debug level message
+- =logger:info(msg, showAlert)= - Info level message (optional alert)
+- =logger:warn(msg, showAlert)= - Warning level message (shows alert by default)
+- =logger:error(msg, showAlert)= - Error level message (shows alert by default)
+- =logger:setLevel(level)= - Set log level ("DEBUG", "INFO", "WARN", "ERROR")
+
+* Troubleshooting
+
+** "whisperkit-cli not found"
+
+Ensure =whisperkit-cli= is installed and the path in =obj.whisperCmd= is correct:
+
+#+begin_src bash
+which whisperkit-cli
+#+end_src
+
+Update the path in your config if needed:
+
+#+begin_src lua
+wd.whisperCmd = "/path/to/whisperkit-cli"
+#+end_src
+
+** "recording command not found"
+
+Similarly, check =sox= is installed:
+
+#+begin_src bash
+which sox
+#+end_src
+
+Update the path if necessary:
+
+#+begin_src lua
+wd.recordCmd = "/path/to/sox"
+#+end_src
+
+** Transcription Produces Empty Output
+
+- Ensure your microphone is working and not muted
+- Check log file for detailed error messages:
+  #+begin_src bash
+  tail -f ~/.hammerspoon/Spoons/hs_whisperDictation/whisper.log
+  #+end_src
+- Try a longer recording (Whisper needs sufficient audio)
+
+** Audio Not Being Recorded
+
+- Verify =sox= permissions
+- Check microphone is selected in System Preferences
+- Test recording manually:
+  #+begin_src bash
+  sox -d /tmp/test.wav
+  #+end_src
+
+* Architecture
+
+The Spoon consists of several key components:
+
+** Logger System
+Custom structured logging with support for multiple levels and outputs (console and file).
+
+** Recording Manager
+Handles audio input via =sox= and manages the recording lifecycle.
+
+** Transcription Handler
+Sends audio to =whisperkit-cli= and processes the output.
+
+** Language Manager
+Tracks current language and provides language switching functionality.
+
+** Menubar Interface
+Provides visual feedback on recording status and allows UI interaction.
+
+* License
+
+MIT License - See LICENSE file for details.
+
+* Contributing
+
+Bug reports and suggestions are welcome. Please open an issue or submit a pull request.
+
+* See Also
+
+- [[https://www.hammerspoon.org/][Hammerspoon Documentation]]
+- [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI Repository]]
+- [[https://github.com/openai/whisper][OpenAI Whisper Repository]]
