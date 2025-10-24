@@ -237,6 +237,7 @@ local function transcribe(audioFile)
     end
 
     obj.logger:info("📋 Copied to clipboard (" .. #text .. " chars)", true)
+    resetMenuToIdle()
   end, args)
 
   if not task then

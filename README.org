@@ -128,6 +128,8 @@ Click the menubar icon again or press the toggle hotkey.
 
 The audio is automatically transcribed asynchronously in the background, and the text is copied to your clipboard once transcription completes. You can continue working while transcription happens without waiting for it to finish.
 
+⚠️ *Warning*: It is technically possible to start a new recording while transcription is still in progress. However, the menubar interface may not properly reflect the current state in this scenario. Use with caution to avoid confusion.
+
 ** Switching Languages
 
 Press your language switch hotkey (default: Ctrl+Cmd+L) to open a language chooser menu displaying all available languages. The currently active language is marked with a "✓ Selected" indicator.
