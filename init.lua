@@ -30,6 +30,18 @@ obj.version = "0.9"
 obj.author = "dmg"
 obj.license = "MIT"
 
+-- === Icons ===
+obj.icons = {
+  idle = "🎤",
+  recording = "🎙️",
+  clipboard = "📋",
+  language = "🌐",
+  stopped = "🛑",
+  transcribing = "⏳",
+  error = "❌",
+  info = "ℹ️",
+}
+
 -- === Config ===
 obj.model = "large-v3"
 obj.tempDir = "/tmp/whisper_dict"
@@ -97,7 +109,7 @@ function Logger:_log(level, msg, showAlert)
   end
 
   if showAlert then
-    local icon = level == self.levels.ERROR and "❌" or "ℹ️"
+    local icon = level == self.levels.ERROR and obj.icons.error or obj.icons.info
     hs.alert.show(icon .. " " .. msg)
   end
 end
@@ -158,13 +170,13 @@ local function updateMenu(title, tip)
 end
 
 local function resetMenuToIdle()
-  updateMenu("🎤 (" .. currentLang() .. ")", "Idle")
+  updateMenu(obj.icons.idle .. " (" .. currentLang() .. ")", "Idle")
 end
 
 local function updateElapsed()
   if obj.startTime then
     local elapsed = os.difftime(os.time(), obj.startTime)
-    updateMenu(string.format("🎙️ %ds (%s)", elapsed, currentLang()), "Recording...")
+    updateMenu(string.format(obj.icons.recording .. " %ds (%s)", elapsed, currentLang()), "Recording...")
   end
 end
 
@@ -185,8 +197,8 @@ end
 
 
 local function transcribe(audioFile)
-  obj.logger:info("⏳ Transcribing (" .. currentLang() .. ")...", true)
-  updateMenu("🎤 (" .. currentLang() .. " T)", "Transcribing...")
+  obj.logger:info(obj.icons.transcribing .. " Transcribing (" .. currentLang() .. ")...", true)
+  updateMenu(obj.icons.idle .. " (" .. currentLang() .. " T)", "Transcribing...")
 
   local args = {
     "transcribe",
@@ -236,7 +248,7 @@ local function transcribe(audioFile)
       return
     end
 
-    obj.logger:info("📋 Copied to clipboard (" .. #text .. " chars)", true)
+    obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
     resetMenuToIdle()
   end, args)
 
@@ -257,14 +269,14 @@ local function toggleRecord()
   if obj.recTask == nil then
     ensureDir(obj.tempDir)
     local audioFile = timestampedFile(obj.tempDir, currentLang(), "wav")
-    obj.logger:info("🎙️ Recording started (" .. currentLang() .. ")", true)
+    obj.logger:info(obj.icons.recording .. " Recording started (" .. currentLang() .. ")", true)
     obj.logger:debug("Recording to file: " .. audioFile)
     obj.recTask = hs.task.new(obj.recordCmd, nil, {"-d", audioFile})
     obj.recTask:start()
     obj.currentAudioFile = audioFile
     startElapsedTimer()
   else
-    obj.logger:info("🛑 Recording stopped")
+    obj.logger:info(obj.icons.stopped .. " Recording stopped")
     obj.recTask:terminate()
     obj.recTask = nil
     stopElapsedTimer()
@@ -291,12 +303,12 @@ local function showLanguageChooser()
   local chooser = hs.chooser.new(function(choice)
     if choice then
       obj.langIndex = choice.index
-      obj.logger:info("🌐 Language switched to: " .. choice.lang, true)
+      obj.logger:info(obj.icons.language .. " Language switched to: " .. choice.lang, true)
       resetMenuToIdle()
     end
   end)
 
-  chooser:width(0.2)
+--  chooser:width(0.3)
   chooser:choices(choices)
   chooser:show()
 end

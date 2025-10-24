@@ -66,6 +66,7 @@ Before using WhisperDictation, ensure you have the following installed:
 | =recordCmd=  | string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
 | =whisperCmd= | string | "/opt/homebrew/bin/whisperkit-cli" | Path to whisperkit-cli binary |
 | =languages=  | table  | {"en"}                             | List of supported languages   |
+| =icons=      | table  | See below                          | Emoji icons for UI states     |
 
 ** Model Selection
 
@@ -87,6 +88,29 @@ Set the model in your config:
 
 #+begin_src lua
 wd.model = "large-v3"  -- or "tiny", "base", "small", "medium"
+#+end_src
+
+** Icon Customization
+
+You can customize the emoji icons used throughout the Spoon. Available icons are:
+
+| Icon              | Property        | Default | Usage                      |
+|-------------------+-----------------+---------+----------------------------|
+| =idle=            | obj.icons.idle  | 🎤      | Idle/ready state           |
+| =recording=       | obj.icons.recording | 🎙️      | During recording           |
+| =clipboard=       | obj.icons.clipboard | 📋      | Text copied to clipboard   |
+| =language=        | obj.icons.language | 🌐      | Language switching         |
+| =stopped=         | obj.icons.stopped | 🛑      | Recording stopped          |
+| =transcribing=    | obj.icons.transcribing | ⏳      | During transcription       |
+| =error=           | obj.icons.error | ❌      | Error notifications        |
+| =info=            | obj.icons.info  | ℹ️      | Info notifications         |
+
+Customize icons in your Hammerspoon config:
+
+#+begin_src lua
+wd.icons.idle = "🎙️"
+wd.icons.recording = "🔴"
+wd.icons.clipboard = "✅"
 #+end_src
 
 ** Hotkey Binding
