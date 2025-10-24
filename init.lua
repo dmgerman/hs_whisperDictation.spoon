@@ -196,6 +196,48 @@ end
 
 
 
+local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
+  obj.logger:debug("whisperkit-cli exit code: " .. tostring(exitCode))
+  if stdErr and #stdErr > 0 then
+    obj.logger:warn("whisperkit-cli stderr:\n" .. stdErr)
+  end
+
+  if exitCode ~= 0 then
+    obj.logger:error("whisperkit-cli failed (exit " .. tostring(exitCode) .. ")", true)
+    resetMenuToIdle()
+    return
+  end
+
+  local text = stdOut or ""
+  if text == "" then
+    obj.logger:error("Empty transcript output", true)
+    resetMenuToIdle()
+    return
+  end
+
+  local outputFile = audioFile:gsub("%.wav$", ".txt")
+  local f, err = io.open(outputFile, "w")
+  if not f then
+    obj.logger:error("Could not open transcript file for writing: " .. tostring(err), true)
+    resetMenuToIdle()
+    return
+  end
+
+  f:write(text)
+  f:close()
+  obj.logger:debug("Transcript written to file: " .. outputFile)
+
+  local ok, errPB = pcall(hs.pasteboard.setContents, text)
+  if not ok then
+    obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
+    resetMenuToIdle()
+    return
+  end
+
+  obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
+  resetMenuToIdle()
+end
+
 local function transcribe(audioFile)
   obj.logger:info(obj.icons.transcribing .. " Transcribing (" .. currentLang() .. ")...", true)
   updateMenu(obj.icons.idle .. " (" .. currentLang() .. " T)", "Transcribing...")
@@ -210,46 +252,7 @@ local function transcribe(audioFile)
   obj.logger:debug("Running command: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
 
   local task = hs.task.new(obj.whisperCmd, function(exitCode, stdOut, stdErr)
-    obj.logger:debug("whisperkit-cli exit code: " .. tostring(exitCode))
-    if stdErr and #stdErr > 0 then
-      obj.logger:warn("whisperkit-cli stderr:\n" .. stdErr)
-    end
-
-    if exitCode ~= 0 then
-      obj.logger:error("whisperkit-cli failed (exit " .. tostring(exitCode) .. ")", true)
-      resetMenuToIdle()
-      return
-    end
-
-    local text = stdOut or ""
-    if text == "" then
-      obj.logger:error("Empty transcript output", true)
-      resetMenuToIdle()
-      return
-    end
-
-    -- Write transcript to file with same name but .txt extension
-    local outputFile = audioFile:gsub("%.wav$", ".txt")
-    local f, err = io.open(outputFile, "w")
-    if not f then
-      obj.logger:error("Could not open transcript file for writing: " .. tostring(err), true)
-      resetMenuToIdle()
-      return
-    end
-
-    f:write(text)
-    f:close()
-    obj.logger:debug("Transcript written to file: " .. outputFile)
-
-    local ok, errPB = pcall(hs.pasteboard.setContents, text)
-    if not ok then
-      obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
-      resetMenuToIdle()
-      return
-    end
-
-    obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
-    resetMenuToIdle()
+    handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
   end, args)
 
   if not task then
