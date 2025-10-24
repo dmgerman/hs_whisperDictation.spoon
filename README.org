@@ -79,9 +79,9 @@ The Whisper model determines transcription accuracy and speed. Available models 
 | medium     | Better   | Slower  | 1.5G  |
 | large-v3   | Best     | Slowest | 2.9G  |
 
-⚠️ **Warning**: Transcription time depends heavily on the model chosen and the length of audio. Larger models provide better accuracy but take significantly longer to process. For example, a 10-second recording might take 5-10 seconds with "tiny" but several minutes with "large-v3" on standard hardware.
+⚠️ *Warning*: Transcription time depends heavily on the model chosen and the length of audio. Larger models provide better accuracy but take significantly longer to process. For example, a 10-second recording might take 5-10 seconds with "tiny" but several minutes with "large-v3" on standard hardware.
 
-⚠️ **First-Time Model Download**: The first time you use a model, it will be automatically downloaded (this happens only once). Download times vary by model size and internet speed. Ensure you have sufficient disk space and a stable internet connection when first running the Spoon with a new model.
+⚠️ *First-Time Model Download*: The first time you use a model, it will be automatically downloaded (this happens only once). Download times vary by model size and internet speed. Ensure you have sufficient disk space and a stable internet connection when first running the Spoon with a new model.
 
 Set the model in your config:
 
