@@ -149,6 +149,7 @@ wd.transcriptionMethod = "whispercli"
 | =recordCmd=           | string | "/opt/homebrew/bin/sox" | Path to sox binary                                            |
 | =transcriptionMethod= | string | "whispercli"            | Active transcription method ("whisperkitcli" or "whispercli") |
 | =languages=           | table  | {"en"}                  | List of supported languages                                   |
+| =showRecordingIndicator= | bool   | true                    | Display large red circle in center of screen while recording  |
 | =icons=               | table  | See below               | Emoji icons for UI states                                     |
 | =logger.enableConsole= | bool   | true                    | Print messages to Hammerspoon console                         |
 | =logger.enableFile=   | bool   | false                   | Write messages to log file                                    |
@@ -209,6 +210,14 @@ Customize icons in your Hammerspoon config:
 wd.icons.idle = "🎙️"
 wd.icons.recording = "🔴"
 wd.icons.clipboard = "✅"
+#+end_src
+
+** Recording Indicator
+
+By default, a large red circle appears in the center of your screen while recording to provide visual feedback. You can disable this if preferred:
+
+#+begin_src lua
+wd.showRecordingIndicator = false  -- Disable the visual indicator
 #+end_src
 
 ** Hotkey Binding

@@ -47,6 +47,7 @@ obj.tempDir = "/tmp/whisper_dict"
 obj.recordCmd = "/opt/homebrew/bin/sox"
 obj.languages = {"en"}
 obj.langIndex = 1
+obj.showRecordingIndicator = true
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -221,6 +222,7 @@ obj.hotkeys = {}
 obj.timer = nil
 obj.startTime = nil
 obj.currentAudioFile = nil
+obj.recordingIndicator = nil
 
 -- === Helpers ===
 local function ensureDir(path)
@@ -268,7 +270,37 @@ local function stopElapsedTimer()
   obj.startTime = nil
 end
 
+local function showRecordingIndicator()
+  if obj.recordingIndicator then return end
 
+  local focusedWindow = hs.window.focusedWindow()
+  local screen = focusedWindow and focusedWindow:screen() or hs.screen.mainScreen()
+  local frame = screen:frame()
+  local centerX = frame.x + frame.w / 2
+  local centerY = frame.y + frame.h / 2
+  local radius = frame.h / 20
+
+  obj.recordingIndicator = hs.drawing.circle(
+    hs.geometry.rect(
+      centerX - radius,
+      centerY - radius,
+      radius * 2,
+      radius * 2
+    )
+  )
+
+  obj.recordingIndicator:setFillColor({red = 1, green = 0, blue = 0, alpha = 0.7})
+  obj.recordingIndicator:setStrokeColor({red = 1, green = 0, blue = 0, alpha = 1})
+  obj.recordingIndicator:setStrokeWidth(2)
+  obj.recordingIndicator:show()
+end
+
+local function hideRecordingIndicator()
+  if obj.recordingIndicator then
+    obj.recordingIndicator:delete()
+    obj.recordingIndicator = nil
+  end
+end
 
 local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
   local method = obj.transcriptionMethods[obj.transcriptionMethod]
@@ -366,11 +398,17 @@ local function toggleRecord()
 
     obj.currentAudioFile = audioFile
     startElapsedTimer()
+    if obj.showRecordingIndicator then
+      showRecordingIndicator()
+    end
   else
     obj.logger:info(obj.icons.stopped .. " Recording stopped")
     obj.recTask:terminate()
     obj.recTask = nil
     stopElapsedTimer()
+    if obj.showRecordingIndicator then
+      hideRecordingIndicator()
+    end
     resetMenuToIdle()
     if obj.currentAudioFile then
       if not hs.fs.attributes(obj.currentAudioFile) then
@@ -456,6 +494,7 @@ function obj:stop()
     obj.recTask = nil
   end
   stopElapsedTimer()
+  hideRecordingIndicator()
   obj.logger:info("WhisperDictation stopped", true)
 end
 
