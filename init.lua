@@ -46,13 +46,87 @@ obj.icons = {
 obj.model = "large-v3"
 obj.tempDir = "/tmp/whisper_dict"
 obj.recordCmd = "/opt/homebrew/bin/sox"
-obj.whisperCmd = "/opt/homebrew/bin/whisperkit-cli"
 obj.languages = {"en"}
 obj.langIndex = 1
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
 }
+
+-- === Transcription Methods ===
+-- Method-agnostic transcription system. Users select which method to use.
+obj.transcriptionMethods = {
+  whisperkitcli = {
+    name = "whisperkitcli",
+    displayName = "WhisperKit CLI",
+    config = {
+      cmd = "/opt/homebrew/bin/whisperkit-cli",
+      model = "large-v3",
+    },
+    validate = function(self)
+      return hs.fs.attributes(self.config.cmd) ~= nil
+    end,
+    buildCommand = function(self, audioFile, lang)
+      local args = {
+        "transcribe",
+        "--model=" .. self.config.model,
+        "--audio-path=" .. audioFile,
+        "--language=" .. lang,
+      }
+      return self.config.cmd, args
+    end,
+    processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
+      if exitCode ~= 0 then
+        return false, stdErr or "whisperkit-cli failed"
+      end
+      local text = stdOut or ""
+      if text == "" then
+        return false, "Empty transcript output"
+      end
+      return true, text
+    end,
+  },
+  whispercli = {
+    name = "whispercli",
+    displayName = "Whisper CLI",
+    config = {
+      cmd = "/opt/homebrew/bin/whisper-cli",
+      modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+    },
+    validate = function(self)
+      return hs.fs.attributes(self.config.cmd) ~= nil
+    end,
+    buildCommand = function(self, audioFile, lang)
+      local args = {
+        "-np",
+        "--model", self.config.modelPath,
+        "--output-txt",
+        audioFile,
+      }
+      return self.config.cmd, args
+    end,
+    processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
+      if exitCode ~= 0 then
+        return false, stdErr or "whisper-cli failed"
+      end
+      -- whisper-cli creates a .txt file with same name as audio (e.g., audio.wav.txt)
+      local outputFile = audioFile .. ".txt"
+      local f = io.open(outputFile, "r")
+      if not f then
+        return false, "Could not read transcript file: " .. outputFile
+      end
+      local text = f:read("*a")
+      f:close()
+      if not text or text == "" then
+        return false, "Empty transcript file"
+      end
+      return true, text
+    end,
+  },
+}
+
+-- Select active transcription method (default to whisperkitcli)
+obj.transcriptionMethod = "whispercli"
 
 -- === Logger ===
 local Logger = {}
@@ -197,24 +271,23 @@ end
 
 
 local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
-  obj.logger:debug("whisperkit-cli exit code: " .. tostring(exitCode))
+  local method = obj.transcriptionMethods[obj.transcriptionMethod]
+  obj.logger:debug(method.displayName .. " exit code: " .. tostring(exitCode))
+
   if stdErr and #stdErr > 0 then
-    obj.logger:warn("whisperkit-cli stderr:\n" .. stdErr)
+    obj.logger:warn(method.displayName .. " stderr:\n" .. stdErr)
   end
 
-  if exitCode ~= 0 then
-    obj.logger:error("whisperkit-cli failed (exit " .. tostring(exitCode) .. ")", true)
+  -- Use the method's processOutput to handle the result
+  local success, text = method:processOutput(audioFile, exitCode, stdOut, stdErr)
+
+  if not success then
+    obj.logger:error(text, true)
     resetMenuToIdle()
     return
   end
 
-  local text = stdOut or ""
-  if text == "" then
-    obj.logger:error("Empty transcript output", true)
-    resetMenuToIdle()
-    return
-  end
-
+  -- Save transcript to file (in case method doesn't already create one)
   local outputFile = audioFile:gsub("%.wav$", ".txt")
   local f, err = io.open(outputFile, "w")
   if not f then
@@ -239,31 +312,32 @@ local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
 end
 
 local function transcribe(audioFile)
+  local method = obj.transcriptionMethods[obj.transcriptionMethod]
+  if not method then
+    obj.logger:error("Unknown transcription method: " .. obj.transcriptionMethod, true)
+    resetMenuToIdle()
+    return
+  end
+
   obj.logger:info(obj.icons.transcribing .. " Transcribing (" .. currentLang() .. ")...", true)
   updateMenu(obj.icons.idle .. " (" .. currentLang() .. " T)", "Transcribing...")
 
-  local args = {
-    "transcribe",
-    "--model=" .. obj.model,
-    "--audio-path=" .. audioFile,
-    "--language=" .. currentLang(),
-  }
+  local cmd, args = method:buildCommand(audioFile, currentLang())
+  obj.logger:info("Running: " .. cmd .. " " .. table.concat(args, " "))
 
-  obj.logger:info("Running: " .. obj.whisperCmd .. " " .. table.concat(args, " "))
-
-  local task = hs.task.new(obj.whisperCmd, function(exitCode, stdOut, stdErr)
+  local task = hs.task.new(cmd, function(exitCode, stdOut, stdErr)
     handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
   end, args)
 
   if not task then
-    obj.logger:error("Failed to create hs.task for whisperkit-cli", true)
+    obj.logger:error("Failed to create hs.task for " .. method.displayName, true)
     resetMenuToIdle()
     return
   end
 
   local ok, err = pcall(function() task:start() end)
   if not ok then
-    obj.logger:error("Failed to start whisperkit-cli: " .. tostring(err), true)
+    obj.logger:error("Failed to start " .. method.displayName .. ": " .. tostring(err), true)
     resetMenuToIdle()
   end
 end
@@ -338,13 +412,23 @@ end
 -- === Public API ===
 function obj:start()
   obj.logger:info("Starting WhisperDictation")
-  local errorSuffix = " whisperDictation not started"
-  if not hs.fs.attributes(obj.whisperCmd) then
-    obj.logger:error("whisperkit-cli not found: " .. obj.whisperCmd .. errorSuffix, true)
-    return
-  end
+  local errorSuffix = " WhisperDictation not started"
+
+  -- Validate recording command
   if not hs.fs.attributes(obj.recordCmd) then
     obj.logger:error("recording command not found: " .. obj.recordCmd .. errorSuffix, true)
+    return
+  end
+
+  -- Validate transcription method
+  local method = obj.transcriptionMethods[obj.transcriptionMethod]
+  if not method then
+    obj.logger:error("Unknown transcription method: " .. obj.transcriptionMethod .. errorSuffix, true)
+    return
+  end
+
+  if not method:validate() then
+    obj.logger:error(method.displayName .. " not found: " .. method.config.cmd .. errorSuffix, true)
     return
   end
 
@@ -356,7 +440,7 @@ function obj:start()
   end
 
   resetMenuToIdle()
-  obj.logger:info("WhisperDictation ready (" .. currentLang() .. ")", true)
+  obj.logger:info("WhisperDictation ready using " .. method.displayName .. " (" .. currentLang() .. ")", true)
 end
 
 function obj:stop()

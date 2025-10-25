@@ -44,10 +44,27 @@ Before using WhisperDictation, ensure you have the following installed:
    #+end_src
 
 2. Add to your Hammerspoon config (~/.hammerspoon/init.lua):
+
+**Using WhisperKit CLI (default)**:
    #+begin_src lua
    wd = hs.loadSpoon("hs_whisperDictation")
-   wd.model = "large-v3"
+   wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
    wd.languages = {"en", "ja", "es", "fr"}
+   wd.transcriptionMethod = "whisperkitcli"
+   wd:bindHotKeys({
+       toggle = {{"ctrl", "cmd"}, "d"},
+       nextLang = {{"ctrl", "cmd"}, "l"},
+   })
+   wd:start()
+   #+end_src
+
+**Using Whisper CLI**:
+   #+begin_src lua
+   wd = hs.loadSpoon("hs_whisperDictation")
+   wd.transcriptionMethods.whispercli.config.cmd = "/opt/homebrew/bin/whisper-cli"
+   wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+   wd.languages = {"en", "ja", "es", "fr"}
+   wd.transcriptionMethod = "whispercli"
    wd:bindHotKeys({
        toggle = {{"ctrl", "cmd"}, "d"},
        nextLang = {{"ctrl", "cmd"}, "l"},
@@ -57,20 +74,58 @@ Before using WhisperDictation, ensure you have the following installed:
 
 3. Reload Hammerspoon configuration
 
+** Transcription Methods
+
+The Spoon supports multiple transcription backends. You must choose which one to use by setting =obj.transcriptionMethod=.
+
+*** Supported Methods
+
+**** =whisperkitcli= (Default)
+Uses [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI]]. Outputs transcription directly to stdout.
+
+Configuration:
+#+begin_src lua
+wd.transcriptionMethods.whisperkitcli.config = {
+  cmd = "/opt/homebrew/bin/whisperkit-cli",
+  model = "large-v3",  -- or "tiny", "base", "small", "medium"
+}
+wd.transcriptionMethod = "whisperkitcli"
+#+end_src
+
+**** =whispercli=
+Uses [[https://github.com/ggerganov/whisper.cpp][Whisper.cpp CLI]]. Creates a =.txt= file alongside the audio file.
+
+Configuration:
+#+begin_src lua
+wd.transcriptionMethods.whispercli.config = {
+  cmd = "/opt/homebrew/bin/whisper-cli",
+  modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+}
+wd.transcriptionMethod = "whispercli"
+#+end_src
+
 ** Customizable Properties
 
 | Property   | Type   | Default                            | Description                   |
 |------------+--------+------------------------------------+-------------------------------|
-| =model=      | string | "large-v3"                         | Whisper model size            |
-| =tempDir=    | string | "/tmp/whisper_dict"                | Temp directory for recordings |
-| =recordCmd=  | string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
-| =whisperCmd= | string | "/opt/homebrew/bin/whisperkit-cli" | Path to whisperkit-cli binary |
-| =languages=  | table  | {"en"}                             | List of supported languages   |
-| =icons=      | table  | See below                          | Emoji icons for UI states     |
+| =tempDir=  | string | "/tmp/whisper_dict"                | Temp directory for recordings |
+| =recordCmd=| string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
+| =transcriptionMethod= | string | "whisperkitcli" | Active transcription method ("whisperkitcli" or "whispercli") |
+| =languages=| table  | {"en"}                             | List of supported languages   |
+| =icons=    | table  | See below                          | Emoji icons for UI states     |
 
 ** Model Selection
 
-The Whisper model determines transcription accuracy and speed. Available models include:
+Model configuration depends on which transcription method you use.
+
+*** WhisperKit CLI
+Set the model string:
+
+#+begin_src lua
+wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"  -- or "tiny", "base", "small", "medium"
+#+end_src
+
+Available models and their characteristics:
 
 | Model      | Accuracy | Speed   | Size  |
 |------------+----------+---------+-------|
@@ -84,11 +139,14 @@ The Whisper model determines transcription accuracy and speed. Available models 
 
 ⚠️ *First-Time Model Download*: The first time you use a model, it will be automatically downloaded (this happens only once). Download times vary by model size and internet speed. Ensure you have sufficient disk space and a stable internet connection when first running the Spoon with a new model.
 
-Set the model in your config:
+*** Whisper CLI
+Set the path to your pre-downloaded model binary:
 
 #+begin_src lua
-wd.model = "large-v3"  -- or "tiny", "base", "small", "medium"
+wd.transcriptionMethods.whispercli.config.modelPath = "/path/to/ggml-large-v3.bin"
 #+end_src
+
+Whisper.cpp models must be downloaded separately. See the [[https://github.com/ggerganov/whisper.cpp][whisper.cpp repository]] for available models.
 
 ** Icon Customization
 
@@ -211,19 +269,27 @@ The Spoon includes a custom logger accessible via =obj.logger=:
 
 * Troubleshooting
 
-** "whisperkit-cli not found"
+** Transcription Method Not Found
 
-Ensure =whisperkit-cli= is installed and the path in =obj.whisperCmd= is correct:
+If you see an error about your transcription method not being found, verify:
 
-#+begin_src bash
-which whisperkit-cli
-#+end_src
+1. You've selected the correct method:
+   #+begin_src lua
+   wd.transcriptionMethod = "whisperkitcli"  -- or "whispercli"
+   #+end_src
 
-Update the path in your config if needed:
+2. The command path is correct for your system:
+   #+begin_src bash
+   which whisperkit-cli   # for whisperkitcli
+   which whisper-cli      # for whispercli
+   #+end_src
 
-#+begin_src lua
-wd.whisperCmd = "/path/to/whisperkit-cli"
-#+end_src
+3. Update the path in your config if needed:
+   #+begin_src lua
+   wd.transcriptionMethods.whisperkitcli.config.cmd = "/path/to/whisperkit-cli"
+   -- or
+   wd.transcriptionMethods.whispercli.config.cmd = "/path/to/whisper-cli"
+   #+end_src
 
 ** "recording command not found"
 
@@ -267,14 +333,49 @@ Custom structured logging with support for multiple levels and outputs (console 
 ** Recording Manager
 Handles audio input via =sox= and manages the recording lifecycle.
 
-** Transcription Handler
-Sends audio to =whisperkit-cli= and processes the output.
+** Transcription Method System
+Pluggable transcription handlers. Each method defines:
+- =config=: Method-specific configuration
+- =validate()=: Check if dependencies are available
+- =buildCommand(audioFile, lang)=: Construct the command to run
+- =processOutput(audioFile, exitCode, stdOut, stdErr)=: Process the result
 
 ** Language Manager
 Tracks current language and provides language switching functionality.
 
 ** Menubar Interface
 Provides visual feedback on recording status and allows UI interaction.
+
+** Extending with Custom Methods
+
+You can add custom transcription methods by adding them to =obj.transcriptionMethods=:
+
+#+begin_src lua
+wd.transcriptionMethods.mymethod = {
+  name = "mymethod",
+  displayName = "My Transcription Method",
+  config = {
+    cmd = "/path/to/transcriber",
+    -- other config options
+  },
+  validate = function(self)
+    return hs.fs.attributes(self.config.cmd) ~= nil
+  end,
+  buildCommand = function(self, audioFile, lang)
+    -- Return command and arguments table
+    return self.config.cmd, {"--audio", audioFile, "--language", lang}
+  end,
+  processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
+    if exitCode ~= 0 then
+      return false, "Command failed"
+    end
+    -- Return success and text
+    return true, stdOut
+  end,
+}
+
+wd.transcriptionMethod = "mymethod"
+#+end_src
 
 * License
 
