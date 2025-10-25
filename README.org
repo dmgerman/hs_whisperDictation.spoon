@@ -321,6 +321,22 @@ Stops the Spoon, cleans up resources, and removes the menubar.
 wd:stop()
 #+end_src
 
+*** =toggleTranscribe()=
+Toggles recording on and off. When recording is stopped, automatically transcribes the audio and copies the result to the clipboard.
+
+Can be called directly as a method or bound to a hotkey.
+
+#+begin_src lua
+-- Call directly
+wd:toggleTranscribe()
+
+-- Or bind to a hotkey
+wd:bindHotKeys({
+    toggle = {{"ctrl", "cmd"}, "d"},
+    nextLang = {{"ctrl", "cmd"}, "l"},
+})
+#+end_src
+
 *** =bindHotKeys(mapping)=
 Binds hotkeys for controlling the Spoon.
 

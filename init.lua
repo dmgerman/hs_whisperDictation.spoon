@@ -374,54 +374,6 @@ local function transcribe(audioFile)
   end
 end
 
-local function toggleRecord()
-  if obj.recTask == nil then
-    ensureDir(obj.tempDir)
-    local audioFile = timestampedFile(obj.tempDir, currentLang(), "wav")
-    obj.logger:info(obj.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
-    obj.logger:info("Running: " .. obj.recordCmd .. " -d " .. audioFile)
-    obj.recTask = hs.task.new(obj.recordCmd, nil, {"-d", audioFile})
-
-    if not obj.recTask then
-      obj.logger:error("Failed to create recording task", true)
-      resetMenuToIdle()
-      return
-    end
-
-    local ok, err = pcall(function() obj.recTask:start() end)
-    if not ok then
-      obj.logger:error("Failed to start recording: " .. tostring(err), true)
-      obj.recTask = nil
-      resetMenuToIdle()
-      return
-    end
-
-    obj.currentAudioFile = audioFile
-    startElapsedTimer()
-    if obj.showRecordingIndicator then
-      showRecordingIndicator()
-    end
-  else
-    obj.logger:info(obj.icons.stopped .. " Recording stopped")
-    obj.recTask:terminate()
-    obj.recTask = nil
-    stopElapsedTimer()
-    if obj.showRecordingIndicator then
-      hideRecordingIndicator()
-    end
-    resetMenuToIdle()
-    if obj.currentAudioFile then
-      if not hs.fs.attributes(obj.currentAudioFile) then
-        obj.logger:error("Recording file was not created: " .. obj.currentAudioFile, true)
-        obj.currentAudioFile = nil
-        return
-      end
-      obj.logger:info("Processing audio file: " .. obj.currentAudioFile)
-      transcribe(obj.currentAudioFile)
-      obj.currentAudioFile = nil
-    end
-  end
-end
 
 local function showLanguageChooser()
   local choices = {}
@@ -448,6 +400,56 @@ local function showLanguageChooser()
 end
 
 -- === Public API ===
+function obj:toggleTranscribe()
+  if self.recTask == nil then
+    ensureDir(self.tempDir)
+    local audioFile = timestampedFile(self.tempDir, currentLang(), "wav")
+    self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
+    self.logger:info("Running: " .. self.recordCmd .. " -d " .. audioFile)
+    self.recTask = hs.task.new(self.recordCmd, nil, {"-d", audioFile})
+
+    if not self.recTask then
+      self.logger:error("Failed to create recording task", true)
+      resetMenuToIdle()
+      return
+    end
+
+    local ok, err = pcall(function() self.recTask:start() end)
+    if not ok then
+      self.logger:error("Failed to start recording: " .. tostring(err), true)
+      self.recTask = nil
+      resetMenuToIdle()
+      return
+    end
+
+    self.currentAudioFile = audioFile
+    startElapsedTimer()
+    if self.showRecordingIndicator then
+      showRecordingIndicator()
+    end
+  else
+    self.logger:info(self.icons.stopped .. " Recording stopped")
+    self.recTask:terminate()
+    self.recTask = nil
+    stopElapsedTimer()
+    if self.showRecordingIndicator then
+      hideRecordingIndicator()
+    end
+    resetMenuToIdle()
+    if self.currentAudioFile then
+      if not hs.fs.attributes(self.currentAudioFile) then
+        self.logger:error("Recording file was not created: " .. self.currentAudioFile, true)
+        self.currentAudioFile = nil
+        return
+      end
+      self.logger:info("Processing audio file: " .. self.currentAudioFile)
+      transcribe(self.currentAudioFile)
+      self.currentAudioFile = nil
+    end
+  end
+  return self
+end
+
 function obj:start()
   obj.logger:info("Starting WhisperDictation")
   local errorSuffix = " WhisperDictation not started"
@@ -474,7 +476,7 @@ function obj:start()
 
   if not obj.menubar then
     obj.menubar = hs.menubar.new()
-    obj.menubar:setClickCallback(toggleRecord)
+    obj.menubar:setClickCallback(function() obj:toggleTranscribe() end)
   end
 
   resetMenuToIdle()
@@ -504,7 +506,7 @@ function obj:bindHotKeys(mapping)
   for name, spec in pairs(map) do
     if obj.hotkeys[name] then obj.hotkeys[name]:delete() end
     if name == "toggle" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], toggleRecord)
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], function() obj:toggleTranscribe() end)
       obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], showLanguageChooser)
