@@ -125,7 +125,7 @@ obj.transcriptionMethods = {
   },
 }
 
--- Select active transcription method (default to whisperkitcli)
+-- Select active transcription method (default to whispercli)
 obj.transcriptionMethod = "whispercli"
 
 -- === Logger ===

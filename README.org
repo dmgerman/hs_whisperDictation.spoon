@@ -22,19 +22,53 @@ It records audio from your microphone and transcribes it using =whisperkit-cli=,
 
 * Requirements
 
-Before using WhisperDictation, ensure you have the following installed:
+** Common Dependencies
 
-** Dependencies
+All transcription methods require:
 
 1. [[https://sox.sourceforge.net/][sox]] - Audio recording tool
    #+begin_src bash
    brew install sox
    #+end_src
 
-2. [[https://github.com/argmaxinc/whisperkit-cli][whisperkit-cli]] - Whisper transcription CLI
-   #+begin_src bash
-   brew install whisperkit-cli
-   #+end_src
+** Transcription Backend (Choose One)
+
+You must choose and install one of the following transcription backends:
+
+*** Option 1: WhisperKit CLI
+
+[[https://github.com/argmaxinc/whisperkit-cli][whisperkit-cli]] - Apple's optimized Whisper implementation
+
+Installation:
+#+begin_src bash
+brew install whisperkit-cli
+#+end_src
+
+Models are downloaded automatically on first use. No additional setup required.
+
+*** Option 2: Whisper CLI (Default)
+
+[[https://github.com/ggerganov/whisper.cpp][whisper.cpp]] - C++ implementation of Whisper
+
+Installation:
+#+begin_src bash
+brew install whisper-cli
+#+end_src
+
+You must manually download and install the desired model binary. Download available models from:
+https://huggingface.co/ggerganov/whisper.cpp/tree/main
+
+Example (for large-v3 model):
+#+begin_src bash
+mkdir -p /usr/local/whisper
+cd /usr/local/whisper
+wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
+#+end_src
+
+Then configure the model path in your Hammerspoon config:
+#+begin_src lua
+wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+#+end_src
 
 * Installation
 
@@ -45,7 +79,8 @@ Before using WhisperDictation, ensure you have the following installed:
 
 2. Add to your Hammerspoon config (~/.hammerspoon/init.lua):
 
-**Using WhisperKit CLI (default)**:
+*Using WhisperKit CLI (default)*:
+
    #+begin_src lua
    wd = hs.loadSpoon("hs_whisperDictation")
    wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
@@ -58,7 +93,9 @@ Before using WhisperDictation, ensure you have the following installed:
    wd:start()
    #+end_src
 
-**Using Whisper CLI**:
+
+*Using Whisper CLI*:
+
    #+begin_src lua
    wd = hs.loadSpoon("hs_whisperDictation")
    wd.transcriptionMethods.whispercli.config.cmd = "/opt/homebrew/bin/whisper-cli"
@@ -80,7 +117,7 @@ The Spoon supports multiple transcription backends. You must choose which one to
 
 *** Supported Methods
 
-**** =whisperkitcli= (Default)
+**** =whisperkitcli=
 Uses [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI]]. Outputs transcription directly to stdout.
 
 Configuration:
@@ -92,7 +129,7 @@ wd.transcriptionMethods.whisperkitcli.config = {
 wd.transcriptionMethod = "whisperkitcli"
 #+end_src
 
-**** =whispercli=
+**** =whispercli= (Default)
 Uses [[https://github.com/ggerganov/whisper.cpp][Whisper.cpp CLI]]. Creates a =.txt= file alongside the audio file.
 
 Configuration:
@@ -110,7 +147,7 @@ wd.transcriptionMethod = "whispercli"
 |------------+--------+------------------------------------+-------------------------------|
 | =tempDir=  | string | "/tmp/whisper_dict"                | Temp directory for recordings |
 | =recordCmd=| string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
-| =transcriptionMethod= | string | "whisperkitcli" | Active transcription method ("whisperkitcli" or "whispercli") |
+| =transcriptionMethod= | string | "whispercli" | Active transcription method ("whisperkitcli" or "whispercli") |
 | =languages=| table  | {"en"}                             | List of supported languages   |
 | =icons=    | table  | See below                          | Emoji icons for UI states     |
 
