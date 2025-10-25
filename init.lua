@@ -19,8 +19,7 @@
 -- wd:start()
 --
 -- Requirements:
---      sox
---      whisperkit-cli
+--      see readme.org
 
 local obj = {}
 obj.__index = obj
@@ -100,6 +99,7 @@ obj.transcriptionMethods = {
       local args = {
         "-np",
         "--model", self.config.modelPath,
+        "--language", lang,
         "--output-txt",
         audioFile,
       }
