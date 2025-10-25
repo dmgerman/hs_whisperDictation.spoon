@@ -143,13 +143,13 @@ wd.transcriptionMethod = "whispercli"
 
 ** Customizable Properties
 
-| Property   | Type   | Default                            | Description                   |
-|------------+--------+------------------------------------+-------------------------------|
-| =tempDir=  | string | "/tmp/whisper_dict"                | Temp directory for recordings |
-| =recordCmd=| string | "/opt/homebrew/bin/sox"            | Path to sox binary            |
-| =transcriptionMethod= | string | "whispercli" | Active transcription method ("whisperkitcli" or "whispercli") |
-| =languages=| table  | {"en"}                             | List of supported languages   |
-| =icons=    | table  | See below                          | Emoji icons for UI states     |
+| Property            | Type   | Default                 | Description                                                   |
+|---------------------+--------+-------------------------+---------------------------------------------------------------|
+| =tempDir=             | string | "/tmp/whisper_dict"     | Temp directory for recordings                                 |
+| recordCmd           | string | "/opt/homebrew/bin/sox" | Path to sox binary                                            |
+| =transcriptionMethod= | string | "whispercli"            | Active transcription method ("whisperkitcli" or "whispercli") |
+| languages           | table  | {"en"}                  | List of supported languages                                   |
+| =icons=               | table  | See below               | Emoji icons for UI states                                     |
 
 ** Model Selection
 
@@ -362,56 +362,117 @@ wd.recordCmd = "/path/to/sox"
 
 * Architecture
 
-The Spoon consists of several key components:
+The Spoon follows a modular design with clear separation of concerns:
 
-** Logger System
-Custom structured logging with support for multiple levels and outputs (console and file).
+** Component Overview
 
-** Recording Manager
-Handles audio input via =sox= and manages the recording lifecycle.
+*** Logger System
+Custom structured logging with support for multiple levels (DEBUG, INFO, WARN, ERROR) and outputs (console and file). Provides unified logging throughout the Spoon.
 
-** Transcription Method System
-Pluggable transcription handlers. Each method defines:
-- =config=: Method-specific configuration
-- =validate()=: Check if dependencies are available
-- =buildCommand(audioFile, lang)=: Construct the command to run
-- =processOutput(audioFile, exitCode, stdOut, stdErr)=: Process the result
+*** Recording Manager
+Manages audio capture via =sox=. The =toggleRecord()= function:
+1. On first call: Starts recording to a timestamped .wav file
+2. Starts an elapsed time timer for menubar display
+3. On second call: Stops recording and passes audio to transcription
 
-** Language Manager
-Tracks current language and provides language switching functionality.
+*** Transcription Method System (Pluggable Architecture)
+Core innovation allowing multiple transcription backends without code duplication. Each method is self-contained with:
 
-** Menubar Interface
-Provides visual feedback on recording status and allows UI interaction.
+**** Method Interface
+Each transcription method must implement:
+
+- =config=: Table containing method-specific configuration (paths, models, etc.)
+- =validate()=: Returns true if dependencies exist and are accessible
+- =buildCommand(audioFile, lang)=: Returns the command path and arguments table for execution
+- =processOutput(audioFile, exitCode, stdOut, stdErr)=: Processes command output and returns (success, text) tuple
+
+**** Built-in Methods
+
+| Method       | Input                | Output       | Use Case                          |
+|--------------+---------------------+--------------+-----------------------------------|
+| whisperkitcli | stdout streaming    | stdout       | Apple's optimized, auto-download  |
+| whispercli   | .txt file creation  | .wav.txt     | Local C++ implementation          |
+
+*** Language Manager
+Simple language selection system:
+- =obj.languages=: List of supported language codes
+- =obj.langIndex=: Currently selected language index
+- =showLanguageChooser()=: Interactive chooser menu
+
+*** Menubar Interface
+Provides visual status and interaction:
+- Displays current state (idle, recording with elapsed time, transcribing)
+- Shows active language code
+- Click to toggle recording
+
+** Data Flow
+
+#+begin_src
+User hotkey (toggle) → toggleRecord()
+  → startRecording() [sox -d file.wav]
+  → menubar shows recording + elapsed time
+  → User hotkey (toggle) again
+  → stopRecording()
+  → transcribe(audioFile)
+    → Get selected method from obj.transcriptionMethods[obj.transcriptionMethod]
+    → method:buildCommand(audioFile, lang) → command + args
+    → hs.task.new() → runs command asynchronously
+    → handleTranscriptionResult() callback
+      → method:processOutput() → extract text
+      → Save to .txt file
+      → Copy to clipboard
+      → Reset menubar to idle
+#+end_src
 
 ** Extending with Custom Methods
 
 You can add custom transcription methods by adding them to =obj.transcriptionMethods=:
 
 #+begin_src lua
+-- Example: Custom transcription method
 wd.transcriptionMethods.mymethod = {
   name = "mymethod",
-  displayName = "My Transcription Method",
+  displayName = "My Custom Transcriber",
   config = {
     cmd = "/path/to/transcriber",
-    -- other config options
+    apiKey = "your-api-key",
+    -- Add any method-specific options
   },
+
+  -- Check if the transcriber is available
   validate = function(self)
     return hs.fs.attributes(self.config.cmd) ~= nil
   end,
+
+  -- Build the command to execute
+  -- Must return: commandPath, argsTable
   buildCommand = function(self, audioFile, lang)
-    -- Return command and arguments table
-    return self.config.cmd, {"--audio", audioFile, "--language", lang}
+    return self.config.cmd, {
+      "--audio", audioFile,
+      "--language", lang,
+      "--api-key", self.config.apiKey,
+    }
   end,
+
+  -- Process the command output
+  -- Must return: (success, text) or (false, errorMessage)
   processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
     if exitCode ~= 0 then
-      return false, "Command failed"
+      return false, "Transcriber failed: " .. (stdErr or "unknown error")
     end
-    -- Return success and text
-    return true, stdOut
+
+    local text = stdOut or ""
+    if text == "" then
+      return false, "Empty transcription output"
+    end
+
+    return true, text
   end,
 }
 
+-- Select your custom method
 wd.transcriptionMethod = "mymethod"
+wd:start()
 #+end_src
 
 * License
