@@ -48,6 +48,7 @@ obj.recordCmd = "/opt/homebrew/bin/sox"
 obj.languages = {"en"}
 obj.langIndex = 1
 obj.showRecordingIndicator = true
+obj.timeoutSeconds = 300  -- Auto-stop recording after 300 seconds (5 minutes). Set to nil to disable.
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -220,6 +221,7 @@ obj.recTask = nil
 obj.menubar = nil
 obj.hotkeys = {}
 obj.timer = nil
+obj.timeoutTimer = nil
 obj.startTime = nil
 obj.currentAudioFile = nil
 obj.recordingIndicator = nil
@@ -268,6 +270,28 @@ local function stopElapsedTimer()
     obj.timer = nil
   end
   obj.startTime = nil
+end
+
+local function startTimeoutTimer()
+  if not obj.timeoutSeconds or obj.timeoutSeconds <= 0 then
+    return
+  end
+
+  if obj.timeoutTimer then obj.timeoutTimer:stop() end
+
+  obj.timeoutTimer = hs.timer.doAfter(obj.timeoutSeconds, function()
+    if obj.recTask then
+      obj.logger:warn(obj.icons.stopped .. " Recording auto-stopped due to timeout (" .. obj.timeoutSeconds .. "s)", true)
+      obj:toggleTranscribe()
+    end
+  end)
+end
+
+local function stopTimeoutTimer()
+  if obj.timeoutTimer then
+    obj.timeoutTimer:stop()
+    obj.timeoutTimer = nil
+  end
 end
 
 local function showRecordingIndicator()
@@ -424,6 +448,7 @@ function obj:toggleTranscribe()
 
     self.currentAudioFile = audioFile
     startElapsedTimer()
+    startTimeoutTimer()
     if self.showRecordingIndicator then
       showRecordingIndicator()
     end
@@ -432,6 +457,7 @@ function obj:toggleTranscribe()
     self.recTask:terminate()
     self.recTask = nil
     stopElapsedTimer()
+    stopTimeoutTimer()
     if self.showRecordingIndicator then
       hideRecordingIndicator()
     end
@@ -496,6 +522,7 @@ function obj:stop()
     obj.recTask = nil
   end
   stopElapsedTimer()
+  stopTimeoutTimer()
   hideRecordingIndicator()
   obj.logger:info("WhisperDictation stopped", true)
 end

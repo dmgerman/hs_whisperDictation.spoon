@@ -16,6 +16,7 @@ It records audio from your microphone and transcribes it using =whisperkit-cli=,
 - 📋 Automatic clipboard copy with character count
 - ⚡ Asynchronous processing - continue working while transcription happens in the background
 - ⏱️ Elapsed time indicator during recording
+- 🛑 Automatic timeout to prevent unattended recordings
 - 🔍 Structured logging with file and console output
 - ⌨️ Customizable hotkeys
 - 💾 Transcript files saved alongside audio
@@ -149,6 +150,7 @@ wd.transcriptionMethod = "whispercli"
 | =recordCmd=           | string | "/opt/homebrew/bin/sox" | Path to sox binary                                            |
 | =transcriptionMethod= | string | "whispercli"            | Active transcription method ("whisperkitcli" or "whispercli") |
 | =languages=           | table  | {"en"}                  | List of supported languages                                   |
+| =timeoutSeconds=      | number | 300                     | Auto-stop recording after N seconds. Set to nil to disable    |
 | =showRecordingIndicator= | bool   | true                    | Display large red circle in center of screen while recording  |
 | =icons=               | table  | See below               | Emoji icons for UI states                                     |
 | =logger.enableConsole= | bool   | true                    | Print messages to Hammerspoon console                         |
@@ -196,11 +198,11 @@ You can customize the emoji icons used throughout the Spoon. Available icons are
 | Icon              | Property        | Default | Usage                      |
 |-------------------+-----------------+---------+----------------------------|
 | =idle=            | obj.icons.idle  | 🎤      | Idle/ready state           |
-| ==recording==     | obj.icons.recording | 🎙️      | During recording           |
+| =recording=       | obj.icons.recording | 🎙️      | During recording           |
 | =clipboard=       | obj.icons.clipboard | 📋      | Text copied to clipboard   |
-| ==language==      | obj.icons.language | 🌐      | Language switching         |
+| =language=        | obj.icons.language | 🌐      | Language switching         |
 | =stopped=         | obj.icons.stopped | 🛑      | Recording stopped          |
-| ==transcribing==  | obj.icons.transcribing | ⏳      | During transcription       |
+| =transcribing=    | obj.icons.transcribing | ⏳      | During transcription       |
 | =error=           | obj.icons.error | ❌      | Error notifications        |
 | =info=            | obj.icons.info  | ℹ️      | Info notifications         |
 
@@ -219,6 +221,39 @@ By default, a large red circle appears in the center of your screen while record
 #+begin_src lua
 wd.showRecordingIndicator = false  -- Disable the visual indicator
 #+end_src
+
+** Recording Timeout
+
+To prevent unattended recordings from running indefinitely, the Spoon includes an automatic timeout feature. When enabled, recordings automatically stop after a specified duration.
+
+*** Configuration
+
+The timeout is controlled via the =timeoutSeconds= property:
+
+#+begin_src lua
+wd.timeoutSeconds = 300  -- Stop recording after 300 seconds (5 minutes) - DEFAULT
+#+end_src
+
+You can customize it to any duration:
+
+#+begin_src lua
+wd.timeoutSeconds = 60   -- Stop after 1 minute
+wd.timeoutSeconds = 600  -- Stop after 10 minutes
+wd.timeoutSeconds = nil  -- Disable timeout completely
+#+end_src
+
+*** Behavior
+
+- When the timeout is reached, recording automatically stops
+- A warning notification is shown: "🛑 Recording auto-stopped due to timeout (300s)"
+- The audio is transcribed and copied to clipboard, just like a manual stop
+- A log message is recorded for debugging
+
+*** Use Cases
+
+- **Security**: Prevent accidental long recordings consuming disk space or battery
+- **Automation**: Useful in scripts or automated workflows
+- **Safety**: Ensures unattended voice input doesn't run indefinitely
 
 ** Hotkey Binding
 
