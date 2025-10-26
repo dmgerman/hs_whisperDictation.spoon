@@ -41,6 +41,13 @@ obj.icons = {
   info = "ℹ️",
 }
 
+-- === Recording Indicator Style ===
+obj.recordingIndicatorStyle = {
+  fillColor = {red = 1, green = 0, blue = 0, alpha = 0.7},
+  strokeColor = {red = 1, green = 0, blue = 0, alpha = 1},
+  strokeWidth = 2,
+}
+
 -- === Config ===
 obj.model = "large-v3"
 obj.tempDir = "/tmp/whisper_dict"
@@ -258,42 +265,6 @@ local function updateElapsed()
   end
 end
 
-local function startElapsedTimer()
-  obj.startTime = os.time()
-  if obj.timer then obj.timer:stop() end
-  obj.timer = hs.timer.doEvery(1, updateElapsed)
-end
-
-local function stopElapsedTimer()
-  if obj.timer then
-    obj.timer:stop()
-    obj.timer = nil
-  end
-  obj.startTime = nil
-end
-
-local function startTimeoutTimer()
-  if not obj.timeoutSeconds or obj.timeoutSeconds <= 0 then
-    return
-  end
-
-  if obj.timeoutTimer then obj.timeoutTimer:stop() end
-
-  obj.timeoutTimer = hs.timer.doAfter(obj.timeoutSeconds, function()
-    if obj.recTask then
-      obj.logger:warn(obj.icons.stopped .. " Recording auto-stopped due to timeout (" .. obj.timeoutSeconds .. "s)", true)
-      obj:toggleTranscribe()
-    end
-  end)
-end
-
-local function stopTimeoutTimer()
-  if obj.timeoutTimer then
-    obj.timeoutTimer:stop()
-    obj.timeoutTimer = nil
-  end
-end
-
 local function showRecordingIndicator()
   if obj.recordingIndicator then return end
 
@@ -313,9 +284,10 @@ local function showRecordingIndicator()
     )
   )
 
-  obj.recordingIndicator:setFillColor({red = 1, green = 0, blue = 0, alpha = 0.7})
-  obj.recordingIndicator:setStrokeColor({red = 1, green = 0, blue = 0, alpha = 1})
-  obj.recordingIndicator:setStrokeWidth(2)
+  local style = obj.recordingIndicatorStyle
+  obj.recordingIndicator:setFillColor(style.fillColor)
+  obj.recordingIndicator:setStrokeColor(style.strokeColor)
+  obj.recordingIndicator:setStrokeWidth(style.strokeWidth)
   obj.recordingIndicator:show()
 end
 
@@ -324,6 +296,57 @@ local function hideRecordingIndicator()
     obj.recordingIndicator:delete()
     obj.recordingIndicator = nil
   end
+end
+
+local function startRecordingSession()
+  -- Start elapsed time display timer
+  obj.startTime = os.time()
+  if obj.timer then obj.timer:stop() end
+  obj.timer = hs.timer.doEvery(1, updateElapsed)
+
+  -- Start auto-stop timeout timer if configured
+  if obj.timeoutSeconds and obj.timeoutSeconds > 0 then
+    if obj.timeoutTimer then obj.timeoutTimer:stop() end
+    obj.timeoutTimer = hs.timer.doAfter(obj.timeoutSeconds, function()
+      if obj.recTask then
+        obj.logger:warn(obj.icons.stopped .. " Recording auto-stopped due to timeout (" .. obj.timeoutSeconds .. "s)", true)
+        obj:toggleTranscribe()
+      end
+    end)
+  end
+
+  -- Show recording indicator if enabled
+  if obj.showRecordingIndicator then
+    showRecordingIndicator()
+  end
+end
+
+local function stopRecordingSession()
+  -- Terminate recording task
+  if obj.recTask then
+    obj.logger:info(obj.icons.stopped .. " Recording stopped")
+    obj.recTask:terminate()
+    obj.recTask = nil
+  end
+
+  -- Stop elapsed time display timer
+  if obj.timer then
+    obj.timer:stop()
+    obj.timer = nil
+  end
+  obj.startTime = nil
+
+  -- Stop auto-stop timeout timer
+  if obj.timeoutTimer then
+    obj.timeoutTimer:stop()
+    obj.timeoutTimer = nil
+  end
+
+  -- Hide recording indicator
+  hideRecordingIndicator()
+
+  -- Reset menu to idle state
+  resetMenuToIdle()
 end
 
 local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
@@ -447,21 +470,9 @@ function obj:toggleTranscribe()
     end
 
     self.currentAudioFile = audioFile
-    startElapsedTimer()
-    startTimeoutTimer()
-    if self.showRecordingIndicator then
-      showRecordingIndicator()
-    end
+    startRecordingSession()
   else
-    self.logger:info(self.icons.stopped .. " Recording stopped")
-    self.recTask:terminate()
-    self.recTask = nil
-    stopElapsedTimer()
-    stopTimeoutTimer()
-    if self.showRecordingIndicator then
-      hideRecordingIndicator()
-    end
-    resetMenuToIdle()
+    stopRecordingSession()
     if self.currentAudioFile then
       if not hs.fs.attributes(self.currentAudioFile) then
         self.logger:error("Recording file was not created: " .. self.currentAudioFile, true)
@@ -517,13 +528,7 @@ function obj:stop()
   end
   for _, hk in pairs(obj.hotkeys) do hk:delete() end
   obj.hotkeys = {}
-  if obj.recTask then
-    obj.recTask:terminate()
-    obj.recTask = nil
-  end
-  stopElapsedTimer()
-  stopTimeoutTimer()
-  hideRecordingIndicator()
+  stopRecordingSession()
   obj.logger:info("WhisperDictation stopped", true)
 end
 

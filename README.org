@@ -152,6 +152,7 @@ wd.transcriptionMethod = "whispercli"
 | =languages=           | table  | {"en"}                  | List of supported languages                                   |
 | =timeoutSeconds=      | number | 300                     | Auto-stop recording after N seconds. Set to nil to disable    |
 | =showRecordingIndicator= | bool   | true                    | Display large red circle in center of screen while recording  |
+| =recordingIndicatorStyle= | table  | See below               | Customize indicator fill color, stroke, and stroke width      |
 | =icons=               | table  | See below               | Emoji icons for UI states                                     |
 | =logger.enableConsole= | bool   | true                    | Print messages to Hammerspoon console                         |
 | =logger.enableFile=   | bool   | false                   | Write messages to log file                                    |
@@ -216,10 +217,44 @@ wd.icons.clipboard = "✅"
 
 ** Recording Indicator
 
-By default, a large red circle appears in the center of your screen while recording to provide visual feedback. You can disable this if preferred:
+By default, a large red circle appears in the center of your screen while recording to provide visual feedback.
+
+*** Disabling the Indicator
+
+You can disable the visual indicator if preferred:
 
 #+begin_src lua
 wd.showRecordingIndicator = false  -- Disable the visual indicator
+#+end_src
+
+*** Customizing the Indicator Appearance
+
+You can customize the colors and stroke width of the recording indicator:
+
+#+begin_src lua
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 1, green = 0, blue = 0, alpha = 0.7},    -- Fill color (RGBA)
+  strokeColor = {red = 1, green = 0, blue = 0, alpha = 1},    -- Stroke color (RGBA)
+  strokeWidth = 2,                                             -- Border width in pixels
+}
+#+end_src
+
+Color values are specified as RGBA (Red, Green, Blue, Alpha) with values from 0.0 to 1.0:
+
+#+begin_src lua
+-- Example: Semi-transparent yellow circle with blue border
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 1, green = 1, blue = 0, alpha = 0.6},
+  strokeColor = {red = 0, green = 0, blue = 1, alpha = 1},
+  strokeWidth = 3,
+}
+
+-- Example: Green circle with no border
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 0, green = 1, blue = 0, alpha = 0.7},
+  strokeColor = {red = 0, green = 1, blue = 0, alpha = 0},
+  strokeWidth = 0,
+}
 #+end_src
 
 ** Recording Timeout
