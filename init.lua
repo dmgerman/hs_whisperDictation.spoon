@@ -55,7 +55,7 @@ obj.recordCmd = "/opt/homebrew/bin/sox"
 obj.languages = {"en"}
 obj.langIndex = 1
 obj.showRecordingIndicator = true
-obj.timeoutSeconds = 300  -- Auto-stop recording after 300 seconds (5 minutes). Set to nil to disable.
+obj.timeoutSeconds = 1800  -- Auto-stop recording after 1800 seconds (30 minutes). Set to nil to disable.
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -452,8 +452,8 @@ function obj:toggleTranscribe()
     ensureDir(self.tempDir)
     local audioFile = timestampedFile(self.tempDir, currentLang(), "wav")
     self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
-    self.logger:info("Running: " .. self.recordCmd .. " -d " .. audioFile)
-    self.recTask = hs.task.new(self.recordCmd, nil, {"-d", audioFile})
+    self.logger:info("Running: " .. self.recordCmd .. "-q -d " .. audioFile)
+    self.recTask = hs.task.new(self.recordCmd, nil, {"-q", "-d", audioFile})
 
     if not self.recTask then
       self.logger:error("Failed to create recording task", true)

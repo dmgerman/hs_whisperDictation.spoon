@@ -150,7 +150,7 @@ wd.transcriptionMethod = "whispercli"
 | =recordCmd=           | string | "/opt/homebrew/bin/sox" | Path to sox binary                                            |
 | =transcriptionMethod= | string | "whispercli"            | Active transcription method ("whisperkitcli" or "whispercli") |
 | =languages=           | table  | {"en"}                  | List of supported languages                                   |
-| =timeoutSeconds=      | number | 300                     | Auto-stop recording after N seconds. Set to nil to disable    |
+| =timeoutSeconds=      | number | 1800                    | Auto-stop recording after N seconds. Set to nil to disable    |
 | =showRecordingIndicator= | bool   | true                    | Display large red circle in center of screen while recording  |
 | =recordingIndicatorStyle= | table  | See below               | Customize indicator fill color, stroke, and stroke width      |
 | =icons=               | table  | See below               | Emoji icons for UI states                                     |
