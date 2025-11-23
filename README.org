@@ -391,8 +391,50 @@ Stops the Spoon, cleans up resources, and removes the menubar.
 wd:stop()
 #+end_src
 
+*** =beginTranscribe(callback)=
+Starts recording with an optional completion callback function. The callback is executed after transcription completes, receiving the transcribed text as a parameter.
+
+Parameters:
+- =callback= (optional): A function to execute when transcription completes. Receives the transcribed text as a parameter. If no callback is provided, the transcribed text is copied to clipboard (default behavior).
+
+When using a callback:
+- The callback is executed asynchronously after successful transcription
+- Any errors in the callback are caught and logged without interrupting the workflow
+- The transcribed text is NOT copied to clipboard when a callback is provided (callback is responsible for handling text)
+
+Examples:
+
+#+begin_src lua
+-- Start recording with a completion callback
+wd:beginTranscribe(function(text)
+  print("Transcription complete: " .. text)
+  -- Custom logic here, e.g., send to API, format text, etc.
+  hs.pasteboard.setContents(text)  -- Or do something else
+end)
+
+-- Or start recording without a callback (uses default behavior: copy to clipboard)
+wd:beginTranscribe()
+#+end_src
+
+*** =endTranscribe()=
+Stops recording and initiates transcription. The audio is automatically processed and, if no callback was set via =beginTranscribe()=, the result is copied to the clipboard.
+
+This method must be called after =beginTranscribe()= to complete the recording session.
+
+#+begin_src lua
+-- Start recording
+wd:beginTranscribe()
+
+-- ... (do your work while recording)
+
+-- Stop recording and transcribe
+wd:endTranscribe()
+#+end_src
+
 *** =toggleTranscribe()=
 Toggles recording on and off. When recording is stopped, automatically transcribes the audio and copies the result to the clipboard.
+
+This is a convenience method that calls either =beginTranscribe()= or =endTranscribe()= depending on the current recording state. It maintains backward compatibility with existing hotkey bindings and menuba interactions.
 
 Can be called directly as a method or bound to a hotkey.
 
