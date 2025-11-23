@@ -1,0 +1,58 @@
+# Verify plan to be implemented
+
+Follow the instructions, THINK HARD.
+
+You can read any files necessary in the current system.
+
+### Instructions
+
+1. **Load the Plan**
+   - Open and read the plan
+   - Treat the contents as a specification that the user wants you to implement.
+
+2. **Validate Consistency**
+   - Analyze whether the plan is **consistent**, **well-defined**, and **implementable** within the context of the **current system**, tools, and constraints.
+   - Identify ambiguities, missing details, contradictions, or assumptions that must be confirmed before implementation.
+
+3. **Ask Clarifying Questions**
+   - If any part of the plan is unclear, inconsistent, incomplete, or contradictory:
+     - Ask specific clarification questions.
+     - Do **not** proceed until all essential ambiguities are resolved.
+
+4. **Propose Revisions**
+   - If improvements are needed for clarity, safety, structure, completeness, or feasibility:
+     - Suggest an improved or updated version of the plan.
+     - Clearly state what was changed and why.
+
+5. **Prepare for Implementation**
+   - Once the plan is confirmed complete and consistent, acknowledge readiness to execute it.
+   - Update the plan as necessary
+
+6. DO NOT implement the plan itself
+
+## Plan
+
+$ARGUMENTS
+
+
+## Output Format Requirements
+
+Your output must include:
+
+1. **Summary of What You Read**  
+   A short summary of the contents of `filename`.
+
+2. **Consistency Assessment**  
+   Describe whether the plan can be implemented as-is and list any detected issues.
+
+3. **Clarification Questions (if needed)**  
+   Bullet-point questions for the user.
+
+4. **Proposed Updated Plan (optional)**  
+   Only if needed; otherwise state that no changes are required.
+
+5. **Readiness Statement**  
+   - If ready:  
+     **“All clarifications resolved. I am ready to implement.”**  
+   - If not ready:  
+     **“I need the above clarifications before implementation.”**
