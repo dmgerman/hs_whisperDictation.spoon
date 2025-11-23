@@ -25,10 +25,10 @@ You can read any files necessary in the current system.
      - Clearly state what was changed and why.
 
 5. **Prepare for Implementation**
-   - Once the plan is confirmed complete and consistent, acknowledge readiness to execute it.
-   - Update the plan as necessary
+   - Once the plan is confirmed complete and consistent update the plan as necessary
+   - Acknowledge readiness to execute it.
 
-6. DO NOT implement the plan itself
+6. **DO NOT EXECUTE THE PLAN**
 
 ## Plan
 

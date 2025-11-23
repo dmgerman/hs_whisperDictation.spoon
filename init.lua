@@ -232,6 +232,7 @@ obj.timeoutTimer = nil
 obj.startTime = nil
 obj.currentAudioFile = nil
 obj.recordingIndicator = nil
+obj.transcriptionCallback = nil
 
 -- === Helpers ===
 local function ensureDir(path)
@@ -379,14 +380,24 @@ local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
   f:close()
   obj.logger:debug("Transcript written to file: " .. outputFile)
 
-  local ok, errPB = pcall(hs.pasteboard.setContents, text)
-  if not ok then
-    obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
-    resetMenuToIdle()
-    return
+  -- Call the callback if one was provided
+  if obj.transcriptionCallback then
+    local ok, err = pcall(obj.transcriptionCallback, text)
+    if not ok then
+      obj.logger:error("Callback error: " .. tostring(err))
+    end
+    obj.transcriptionCallback = nil
+  else
+    -- Only copy to clipboard if no callback was provided (preserves default behavior)
+    local ok, errPB = pcall(hs.pasteboard.setContents, text)
+    if not ok then
+      obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
+      resetMenuToIdle()
+      return
+    end
+    obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
   end
 
-  obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
   resetMenuToIdle()
 end
 
@@ -447,42 +458,63 @@ local function showLanguageChooser()
 end
 
 -- === Public API ===
+function obj:beginTranscribe(callback)
+  if self.recTask ~= nil then
+    self.logger:warn("Recording already in progress", true)
+    return self
+  end
+
+  ensureDir(self.tempDir)
+  local audioFile = timestampedFile(self.tempDir, currentLang(), "wav")
+  self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
+  self.logger:info("Running: " .. self.recordCmd .. "-q -d " .. audioFile)
+  self.recTask = hs.task.new(self.recordCmd, nil, {"-q", "-d", audioFile})
+
+  if not self.recTask then
+    self.logger:error("Failed to create recording task", true)
+    resetMenuToIdle()
+    return self
+  end
+
+  local ok, err = pcall(function() self.recTask:start() end)
+  if not ok then
+    self.logger:error("Failed to start recording: " .. tostring(err), true)
+    self.recTask = nil
+    resetMenuToIdle()
+    return self
+  end
+
+  self.currentAudioFile = audioFile
+  self.transcriptionCallback = callback
+  startRecordingSession()
+  return self
+end
+
+function obj:endTranscribe()
+  if self.recTask == nil then
+    self.logger:warn("No recording in progress", true)
+    return self
+  end
+
+  stopRecordingSession()
+  if self.currentAudioFile then
+    if not hs.fs.attributes(self.currentAudioFile) then
+      self.logger:error("Recording file was not created: " .. self.currentAudioFile, true)
+      self.currentAudioFile = nil
+      return self
+    end
+    self.logger:info("Processing audio file: " .. self.currentAudioFile)
+    transcribe(self.currentAudioFile)
+    self.currentAudioFile = nil
+  end
+  return self
+end
+
 function obj:toggleTranscribe()
   if self.recTask == nil then
-    ensureDir(self.tempDir)
-    local audioFile = timestampedFile(self.tempDir, currentLang(), "wav")
-    self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
-    self.logger:info("Running: " .. self.recordCmd .. "-q -d " .. audioFile)
-    self.recTask = hs.task.new(self.recordCmd, nil, {"-q", "-d", audioFile})
-
-    if not self.recTask then
-      self.logger:error("Failed to create recording task", true)
-      resetMenuToIdle()
-      return
-    end
-
-    local ok, err = pcall(function() self.recTask:start() end)
-    if not ok then
-      self.logger:error("Failed to start recording: " .. tostring(err), true)
-      self.recTask = nil
-      resetMenuToIdle()
-      return
-    end
-
-    self.currentAudioFile = audioFile
-    startRecordingSession()
+    self:beginTranscribe()
   else
-    stopRecordingSession()
-    if self.currentAudioFile then
-      if not hs.fs.attributes(self.currentAudioFile) then
-        self.logger:error("Recording file was not created: " .. self.currentAudioFile, true)
-        self.currentAudioFile = nil
-        return
-      end
-      self.logger:info("Processing audio file: " .. self.currentAudioFile)
-      transcribe(self.currentAudioFile)
-      self.currentAudioFile = nil
-    end
+    self:endTranscribe()
   end
   return self
 end
