@@ -1,0 +1,140 @@
+#+title: WhisperDictation Configuration Reference
+#+author: dmg
+#+date: 2025
+#+language: en
+
+Detailed configuration options for WhisperDictation. For basic setup, see [[file:README.org][README.org]].
+
+* Icon Customization
+
+You can customize the emoji icons used throughout the Spoon:
+
+| Icon           | Property               | Default | Usage                    |
+|----------------+------------------------+---------+--------------------------|
+| =idle=         | obj.icons.idle         | 🎤      | Idle/ready state         |
+| =recording=    | obj.icons.recording    | 🎙️      | During recording         |
+| =clipboard=    | obj.icons.clipboard    | 📋      | Text copied to clipboard |
+| =language=     | obj.icons.language     | 🌐      | Language switching       |
+| =stopped=      | obj.icons.stopped      | 🛑      | Recording stopped        |
+| =transcribing= | obj.icons.transcribing | ⏳      | During transcription     |
+| =error=        | obj.icons.error        | ❌      | Error notifications      |
+| =info=         | obj.icons.info         | ℹ️      | Info notifications       |
+
+Example:
+#+begin_src lua
+wd.icons.idle = "🎙️"
+wd.icons.recording = "🔴"
+wd.icons.clipboard = "✅"
+#+end_src
+
+* Recording Indicator
+
+A large red circle appears in the center of your screen while recording.
+
+** Disabling the Indicator
+
+#+begin_src lua
+wd.showRecordingIndicator = false
+#+end_src
+
+** Customizing Appearance
+
+Colors are RGBA with values from 0.0 to 1.0:
+
+#+begin_src lua
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 1, green = 0, blue = 0, alpha = 0.7},
+  strokeColor = {red = 1, green = 0, blue = 0, alpha = 1},
+  strokeWidth = 2,
+}
+#+end_src
+
+Examples:
+#+begin_src lua
+-- Semi-transparent yellow circle with blue border
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 1, green = 1, blue = 0, alpha = 0.6},
+  strokeColor = {red = 0, green = 0, blue = 1, alpha = 1},
+  strokeWidth = 3,
+}
+
+-- Green circle with no border
+wd.recordingIndicatorStyle = {
+  fillColor = {red = 0, green = 1, blue = 0, alpha = 0.7},
+  strokeColor = {red = 0, green = 1, blue = 0, alpha = 0},
+  strokeWidth = 0,
+}
+#+end_src
+
+* Recording Timeout
+
+Recordings automatically stop after a specified duration to prevent unattended recordings.
+
+** Configuration
+
+#+begin_src lua
+wd.timeoutSeconds = 1800  -- Default: 30 minutes
+wd.timeoutSeconds = 60    -- Stop after 1 minute
+wd.timeoutSeconds = nil   -- Disable timeout completely
+#+end_src
+
+** Behavior
+
+- When timeout is reached, recording stops automatically
+- Warning notification: "🛑 Recording auto-stopped due to timeout"
+- Audio is transcribed normally
+
+* Logging Configuration
+
+Default: INFO-level messages to Hammerspoon console.
+
+** Options
+
+#+begin_src lua
+-- Console logging (enabled by default)
+wd.logger.enableConsole = true
+
+-- File logging (disabled by default)
+wd.logger.enableFile = true
+wd.logger.logFile = os.getenv("HOME") .. "/.hammerspoon/Spoons/hs_whisperDictation/whisper.log"
+
+-- Log level: DEBUG, INFO (default), WARN, ERROR
+wd.logger:setLevel("DEBUG")
+#+end_src
+
+** Viewing Logs
+
+- *Console*: Hammerspoon menu → Console (real-time)
+- *File*: =tail -f ~/.hammerspoon/Spoons/hs_whisperDictation/whisper.log= (requires =enableFile = true=)
+
+* Server Configuration (whisperserver method)
+
+Full configuration options for the HTTP server backend:
+
+#+begin_src lua
+wd.serverConfig = {
+  executable = "/path/to/whisper-server",
+  modelPath = "/usr/local/whisper/ggml-model.bin",
+  modelPathFallback = "/usr/local/whisper/ggml-large-v3-turbo.bin",
+  host = "127.0.0.1",
+  port = "8080",
+  startupTimeout = 10,  -- seconds to wait for server
+  curlCmd = "/usr/bin/curl",
+}
+#+end_src
+
+** Server Lifecycle
+
+- *Auto-start*: Server starts when spoon starts
+- *Auto-stop*: Server stops when spoon stops
+- *Auto-restart*: Server restarts on language change
+- *External servers*: If a server is already running on the port, it will be used (not stopped on spoon stop)
+
+** Manual Control
+
+#+begin_src lua
+wd:startServer()        -- Start server
+wd:stopServer()         -- Stop server (only if managed by spoon)
+wd:isServerRunning()    -- Check health
+wd:ensureServer()       -- Start if not running, wait until ready
+#+end_src

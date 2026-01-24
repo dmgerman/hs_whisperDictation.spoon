@@ -1,13 +1,14 @@
 --- === WhisperDictation ===
 ---
 --- Toggle local Whisper-based dictation with menubar indicator.
---- Records from mic via `sox`, transcribes via whisperkit-cli, copies text to clipboard.
+--- Records from mic via `sox`, transcribes via multiple backends, copies text to clipboard.
 ---
 --- Features:
 --- • Dynamic filename with timestamp
 --- • Elapsed time indicator in menubar during recording
---- • Multiple languages (--language option to whisperkit-cli)
+--- • Multiple languages (--language option or server restart)
 --- • Clipboard copy and character count summary
+--- • Multiple transcription backends: whisperkit-cli, whisper-cli, whisper-server
 ---
 --- Usage:
 -- wd = hs.loadSpoon("hs_whisperDictation")
@@ -25,7 +26,7 @@ local obj = {}
 obj.__index = obj
 
 obj.name = "WhisperDictation"
-obj.version = "0.9"
+obj.version = "1.0"
 obj.author = "dmg"
 obj.license = "MIT"
 
@@ -61,8 +62,21 @@ obj.defaultHotkeys = {
   nextLang = {{"ctrl", "cmd"}, "l"},
 }
 
+-- === Server Configuration (for whisperserver method) ===
+obj.serverConfig = {
+  executable = "/path/to/whisper-server",
+  modelPath = "/usr/local/whisper/ggml-model.bin",
+  modelPathFallback = "/usr/local/whisper/ggml-large-v3-turbo.bin",
+  host = "127.0.0.1",
+  port = "8080",
+  startupTimeout = 10,  -- seconds to wait for server to start
+  curlCmd = "/usr/bin/curl",
+}
+
 -- === Transcription Methods ===
 -- Method-agnostic transcription system. Users select which method to use.
+-- Each method implements: validate(), transcribe(audioFile, lang, callback)
+-- callback signature: callback(success, text_or_error)
 obj.transcriptionMethods = {
   whisperkitcli = {
     name = "whisperkitcli",
@@ -74,26 +88,41 @@ obj.transcriptionMethods = {
     validate = function(self)
       return hs.fs.attributes(self.config.cmd) ~= nil
     end,
-    buildCommand = function(self, audioFile, lang)
+    --- Transcribe audio file using WhisperKit CLI.
+    -- @param audioFile (string): Path to the WAV file
+    -- @param lang (string): Language code (e.g., "en", "ja")
+    -- @param callback (function): Called with (success, text_or_error)
+    transcribe = function(self, audioFile, lang, callback)
       local args = {
         "transcribe",
         "--model=" .. self.config.model,
         "--audio-path=" .. audioFile,
         "--language=" .. lang,
       }
-      return self.config.cmd, args
-    end,
-    processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
-      if exitCode ~= 0 then
-        return false, stdErr or "whisperkit-cli failed"
+      obj.logger:info("Running: " .. self.config.cmd .. " " .. table.concat(args, " "))
+      local task = hs.task.new(self.config.cmd, function(exitCode, stdOut, stdErr)
+        if exitCode ~= 0 then
+          callback(false, stdErr or "whisperkit-cli failed")
+          return
+        end
+        local text = stdOut or ""
+        if text == "" then
+          callback(false, "Empty transcript output")
+          return
+        end
+        callback(true, text)
+      end, args)
+      if not task then
+        callback(false, "Failed to create hs.task for WhisperKit CLI")
+        return
       end
-      local text = stdOut or ""
-      if text == "" then
-        return false, "Empty transcript output"
+      local ok, err = pcall(function() task:start() end)
+      if not ok then
+        callback(false, "Failed to start WhisperKit CLI: " .. tostring(err))
       end
-      return true, text
     end,
   },
+
   whispercli = {
     name = "whispercli",
     displayName = "Whisper CLI",
@@ -104,7 +133,11 @@ obj.transcriptionMethods = {
     validate = function(self)
       return hs.fs.attributes(self.config.cmd) ~= nil
     end,
-    buildCommand = function(self, audioFile, lang)
+    --- Transcribe audio file using Whisper CLI (whisper.cpp).
+    -- @param audioFile (string): Path to the WAV file
+    -- @param lang (string): Language code (e.g., "en", "ja")
+    -- @param callback (function): Called with (success, text_or_error)
+    transcribe = function(self, audioFile, lang, callback)
       local args = {
         "-np",
         "--model", self.config.modelPath,
@@ -112,24 +145,96 @@ obj.transcriptionMethods = {
         "--output-txt",
         audioFile,
       }
-      return self.config.cmd, args
+      obj.logger:info("Running: " .. self.config.cmd .. " " .. table.concat(args, " "))
+      local task = hs.task.new(self.config.cmd, function(exitCode, stdOut, stdErr)
+        if exitCode ~= 0 then
+          callback(false, stdErr or "whisper-cli failed")
+          return
+        end
+        -- whisper-cli creates a .txt file with same name as audio (e.g., audio.wav.txt)
+        local outputFile = audioFile .. ".txt"
+        local f = io.open(outputFile, "r")
+        if not f then
+          callback(false, "Could not read transcript file: " .. outputFile)
+          return
+        end
+        local text = f:read("*a")
+        f:close()
+        if not text or text == "" then
+          callback(false, "Empty transcript file")
+          return
+        end
+        callback(true, text)
+      end, args)
+      if not task then
+        callback(false, "Failed to create hs.task for Whisper CLI")
+        return
+      end
+      local ok, err = pcall(function() task:start() end)
+      if not ok then
+        callback(false, "Failed to start Whisper CLI: " .. tostring(err))
+      end
     end,
-    processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
-      if exitCode ~= 0 then
-        return false, stdErr or "whisper-cli failed"
+  },
+
+  whisperserver = {
+    name = "whisperserver",
+    displayName = "Whisper Server",
+    config = {}, -- Uses obj.serverConfig
+    validate = function(self)
+      return hs.fs.attributes(obj.serverConfig.executable) ~= nil
+    end,
+    --- Transcribe audio file by sending to whisper server via HTTP POST.
+    -- @param audioFile (string): Path to the WAV file
+    -- @param lang (string): Language code (currently unused, server uses loaded model)
+    -- @param callback (function): Called with (success, text_or_error)
+    transcribe = function(self, audioFile, lang, callback)
+      -- Ensure server is running before transcribing
+      if not obj:isServerRunning() then
+        local started, err = obj:ensureServer()
+        if not started then
+          callback(false, "Server not available: " .. tostring(err))
+          return
+        end
       end
-      -- whisper-cli creates a .txt file with same name as audio (e.g., audio.wav.txt)
-      local outputFile = audioFile .. ".txt"
-      local f = io.open(outputFile, "r")
-      if not f then
-        return false, "Could not read transcript file: " .. outputFile
+      local serverUrl = string.format("http://%s:%s/inference",
+        obj.serverConfig.host, obj.serverConfig.port)
+      local args = {
+        "-s", "-X", "POST", serverUrl,
+        "-F", string.format("file=@%s", audioFile),
+        "-F", "response_format=text",
+      }
+      obj.logger:info("Running: " .. obj.serverConfig.curlCmd .. " " .. table.concat(args, " "))
+      local task = hs.task.new(obj.serverConfig.curlCmd, function(exitCode, stdOut, stdErr)
+        if exitCode ~= 0 then
+          callback(false, "curl failed: " .. (stdErr or "unknown error"))
+          return
+        end
+        local text = (stdOut or ""):match("^%s*(.-)%s*$") -- trim whitespace
+        if text == "" then
+          callback(false, "Empty response from server")
+          return
+        end
+        -- Check for server error response
+        if text:match('^{"error"') then
+          callback(false, "Server error: " .. text)
+          return
+        end
+        -- Post-process: remove leading spaces from each line
+        local lines = {}
+        for line in text:gmatch("[^\n]+") do
+          table.insert(lines, line:match("^%s*(.-)$"))
+        end
+        callback(true, table.concat(lines, "\n"))
+      end, args)
+      if not task then
+        callback(false, "Failed to create hs.task for curl")
+        return
       end
-      local text = f:read("*a")
-      f:close()
-      if not text or text == "" then
-        return false, "Empty transcript file"
+      local ok, err = pcall(function() task:start() end)
+      if not ok then
+        callback(false, "Failed to start curl: " .. tostring(err))
       end
-      return true, text
     end,
   },
 }
@@ -233,6 +338,10 @@ obj.startTime = nil
 obj.currentAudioFile = nil
 obj.recordingIndicator = nil
 obj.transcriptionCallback = nil
+
+-- Server state (for whisperserver method)
+obj.serverProcess = nil
+obj.serverCurrentLang = nil  -- Track language to detect when restart is needed
 
 -- === Helpers ===
 local function ensureDir(path)
@@ -350,41 +459,203 @@ local function stopRecordingSession()
   resetMenuToIdle()
 end
 
-local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
-  local method = obj.transcriptionMethods[obj.transcriptionMethod]
-  obj.logger:debug(method.displayName .. " exit code: " .. tostring(exitCode))
+-- === Server Lifecycle Methods ===
 
-  if stdErr and #stdErr > 0 then
-    obj.logger:warn(method.displayName .. " stderr:\n" .. stdErr)
+--- Get the best available model path.
+-- Checks primary path first, falls back to fallback path.
+-- @return (string|nil): Model path or nil if neither exists
+local function getServerModelPath()
+  if hs.fs.attributes(obj.serverConfig.modelPath) then
+    return obj.serverConfig.modelPath
+  end
+  return nil
+end
+
+--- Check if a whisper server is responding on the configured port.
+-- @return (boolean): true if server is healthy (regardless of who started it)
+function obj:isServerRunning()
+  -- Health check via curl (synchronous, fast)
+  -- In Lua 5.2+, os.execute returns: true/nil, "exit"/"signal", code
+  local serverUrl = string.format("http://%s:%s", self.serverConfig.host, self.serverConfig.port)
+  local ok = os.execute(string.format(
+    "%s -s -o /dev/null --connect-timeout 1 %s 2>/dev/null",
+    self.serverConfig.curlCmd, serverUrl
+  ))
+  -- If server is not responding but we have a process handle, clean it up
+  if ok ~= true and self.serverProcess then
+    if not self.serverProcess:isRunning() then
+      self.serverProcess = nil
+    end
+  end
+  return ok == true
+end
+
+--- Start the whisper server.
+-- If a server is already running on the port (externally started), adopts it.
+-- @return (boolean, string|nil): success, error message on failure
+function obj:startServer()
+  if self:isServerRunning() then
+    -- Server already running - could be ours or external
+    if self.serverProcess then
+      self.logger:info("Whisper server already running (managed by this spoon)")
+    else
+      self.logger:info("Whisper server already running (external process)")
+    end
+    self.serverCurrentLang = currentLang()
+    return true, nil
   end
 
-  -- Use the method's processOutput to handle the result
-  local success, text = method:processOutput(audioFile, exitCode, stdOut, stdErr)
+  local modelPath = getServerModelPath()
+  if not modelPath then
+    local err = "Whisper model not found at " .. self.serverConfig.modelPath
+    self.logger:error(err, true)
+    return false, err
+  end
+
+  if not hs.fs.attributes(self.serverConfig.executable) then
+    local err = "Whisper server executable not found at " .. self.serverConfig.executable
+    self.logger:error(err, true)
+    return false, err
+  end
+
+  local args = {
+    "-m", modelPath,
+    "--host", self.serverConfig.host,
+    "--port", self.serverConfig.port,
+  }
+
+  self.logger:info("Starting whisper server with model " .. modelPath)
+  self.serverProcess = hs.task.new(self.serverConfig.executable, function(exitCode, stdOut, stdErr)
+    self.logger:warn("Whisper server exited with code " .. tostring(exitCode))
+    if stdErr and #stdErr > 0 then
+      self.logger:debug("Server stderr: " .. stdErr)
+    end
+    self.serverProcess = nil
+  end, args)
+
+  if not self.serverProcess then
+    local err = "Failed to create server task"
+    self.logger:error(err, true)
+    return false, err
+  end
+
+  local ok, err = pcall(function() self.serverProcess:start() end)
+  if not ok then
+    self.serverProcess = nil
+    local errMsg = "Failed to start server: " .. tostring(err)
+    self.logger:error(errMsg, true)
+    return false, errMsg
+  end
+
+  self.serverCurrentLang = currentLang()
+  return true, nil
+end
+
+--- Stop the whisper server (only if managed by this spoon).
+-- External servers are not stopped.
+function obj:stopServer()
+  if self.serverProcess and self.serverProcess:isRunning() then
+    self.logger:info("Stopping whisper server")
+    self.serverProcess:terminate()
+    self.serverProcess = nil
+    self.serverCurrentLang = nil
+  elseif self:isServerRunning() then
+    self.logger:info("External whisper server running - not stopping (not managed by this spoon)")
+  end
+end
+
+--- Ensure the whisper server is running, starting it if needed.
+-- Waits for server to become healthy up to startupTimeout.
+-- @return (boolean, string|nil): success, error message on failure
+function obj:ensureServer()
+  if self:isServerRunning() then
+    return true, nil
+  end
+
+  local started, err = self:startServer()
+  if not started then
+    return false, err
+  end
+
+  -- Poll until server is healthy or timeout
+  local pollInterval = 0.5
+  local maxAttempts = math.ceil(self.serverConfig.startupTimeout / pollInterval)
+  local attempts = 0
+
+  while attempts < maxAttempts do
+    hs.timer.usleep(pollInterval * 1000000)  -- Convert to microseconds
+    attempts = attempts + 1
+    if self:isServerRunning() then
+      self.logger:info("Whisper server ready")
+      return true, nil
+    end
+  end
+
+  local errMsg = "Server failed to start after " .. self.serverConfig.startupTimeout .. " seconds"
+  self.logger:error(errMsg, true)
+  return false, errMsg
+end
+
+--- Restart the server if language has changed.
+-- Only relevant for whisperserver method.
+-- Note: External servers cannot be restarted - a warning is logged.
+-- @return (boolean): true if restart was needed and successful, or not needed
+function obj:restartServerIfNeeded()
+  if self.transcriptionMethod ~= "whisperserver" then
+    return true
+  end
+  if self.serverCurrentLang == currentLang() then
+    return true  -- No restart needed
+  end
+  if not self.serverProcess and self:isServerRunning() then
+    -- External server - can't restart it
+    self.logger:warn("Language changed but using external server - cannot restart. Transcription may use wrong language.")
+    self.serverCurrentLang = currentLang()
+    return true
+  end
+  if not self.serverProcess then
+    return true  -- No server running, will be started on next transcription
+  end
+
+  self.logger:info("Language changed, restarting server")
+  self:stopServer()
+  local started, _ = self:startServer()
+  return started
+end
+
+-- === Transcription Handling ===
+
+--- Handle transcription result from any method.
+-- @param success (boolean): Whether transcription succeeded
+-- @param textOrError (string): Transcribed text on success, error message on failure
+-- @param audioFile (string): Path to the audio file (for saving transcript)
+local function handleTranscriptionResult(success, textOrError, audioFile)
+  local method = obj.transcriptionMethods[obj.transcriptionMethod]
 
   if not success then
-    obj.logger:error(text, true)
+    obj.logger:error(method.displayName .. ": " .. textOrError, true)
     resetMenuToIdle()
     return
   end
 
-  -- Save transcript to file (in case method doesn't already create one)
+  local text = textOrError
+
+  -- Save transcript to file
   local outputFile = audioFile:gsub("%.wav$", ".txt")
   local f, err = io.open(outputFile, "w")
-  if not f then
-    obj.logger:error("Could not open transcript file for writing: " .. tostring(err), true)
-    resetMenuToIdle()
-    return
+  if f then
+    f:write(text)
+    f:close()
+    obj.logger:debug("Transcript written to file: " .. outputFile)
+  else
+    obj.logger:warn("Could not save transcript file: " .. tostring(err))
   end
-
-  f:write(text)
-  f:close()
-  obj.logger:debug("Transcript written to file: " .. outputFile)
 
   -- Call the callback if one was provided
   if obj.transcriptionCallback then
-    local ok, err = pcall(obj.transcriptionCallback, text)
+    local ok, callbackErr = pcall(obj.transcriptionCallback, text)
     if not ok then
-      obj.logger:error("Callback error: " .. tostring(err))
+      obj.logger:error("Callback error: " .. tostring(callbackErr))
     end
     obj.transcriptionCallback = nil
   else
@@ -401,6 +672,8 @@ local function handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
   resetMenuToIdle()
 end
 
+--- Transcribe an audio file using the selected method.
+-- @param audioFile (string): Path to the WAV file to transcribe
 local function transcribe(audioFile)
   local method = obj.transcriptionMethods[obj.transcriptionMethod]
   if not method then
@@ -412,24 +685,10 @@ local function transcribe(audioFile)
   obj.logger:info(obj.icons.transcribing .. " Transcribing (" .. currentLang() .. ")...", true)
   updateMenu(obj.icons.idle .. " (" .. currentLang() .. " T)", "Transcribing...")
 
-  local cmd, args = method:buildCommand(audioFile, currentLang())
-  obj.logger:info("Running: " .. cmd .. " " .. table.concat(args, " "))
-
-  local task = hs.task.new(cmd, function(exitCode, stdOut, stdErr)
-    handleTranscriptionResult(audioFile, exitCode, stdOut, stdErr)
-  end, args)
-
-  if not task then
-    obj.logger:error("Failed to create hs.task for " .. method.displayName, true)
-    resetMenuToIdle()
-    return
-  end
-
-  local ok, err = pcall(function() task:start() end)
-  if not ok then
-    obj.logger:error("Failed to start " .. method.displayName .. ": " .. tostring(err), true)
-    resetMenuToIdle()
-  end
+  -- Call the method's transcribe function with callback
+  method:transcribe(audioFile, currentLang(), function(success, textOrError)
+    handleTranscriptionResult(success, textOrError, audioFile)
+  end)
 end
 
 
@@ -448,6 +707,8 @@ local function showLanguageChooser()
     if choice then
       obj.langIndex = choice.index
       obj.logger:info(obj.icons.language .. " Language switched to: " .. choice.lang, true)
+      -- Restart server if using whisperserver method and language changed
+      obj:restartServerIfNeeded()
       resetMenuToIdle()
     end
   end)
@@ -537,7 +798,9 @@ function obj:start()
   end
 
   if not method:validate() then
-    obj.logger:error(method.displayName .. " not found: " .. method.config.cmd .. errorSuffix, true)
+    -- Build appropriate error message based on method type
+    local details = method.config.cmd or obj.serverConfig.executable
+    obj.logger:error(method.displayName .. " not found: " .. details .. errorSuffix, true)
     return
   end
 
@@ -548,12 +811,25 @@ function obj:start()
     obj.menubar:setClickCallback(function() obj:toggleTranscribe() end)
   end
 
+  -- Start server if using whisperserver method
+  if obj.transcriptionMethod == "whisperserver" then
+    obj.logger:info("Starting whisper server...")
+    local started, err = obj:startServer()
+    if not started then
+      obj.logger:warn("Server not started: " .. tostring(err) .. " (will retry on first transcription)")
+    end
+  end
+
   resetMenuToIdle()
   obj.logger:info("WhisperDictation ready using " .. method.displayName .. " (" .. currentLang() .. ")", true)
 end
 
 function obj:stop()
   obj.logger:info("Stopping WhisperDictation")
+
+  -- Stop the whisper server if running
+  obj:stopServer()
+
   if obj.menubar then
     obj.menubar:delete()
     obj.menubar = nil

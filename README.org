@@ -7,688 +7,199 @@
 
 WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that provides local, offline voice dictation powered by [[https://openai.com/research/whisper][OpenAI's Whisper]] model.
 
-It records audio from your microphone and transcribes it using =whisperkit-cli=, then automatically copies the transcribed text to your clipboard. Both recording and transcription happen asynchronously, allowing you to continue working without interruption. A menubar indicator shows recording status and elapsed time.
+Records audio from your microphone, transcribes it locally, and copies the text to your clipboard. A menubar indicator shows recording status and elapsed time.
 
 ** Key Features
 
-- 🎙️ Local voice-to-text transcription (no cloud required)
-- 🌐 Multi-language support (English, Japanese, Spanish, French, etc.)
-- 📋 Automatic clipboard copy with character count
-- ⚡ Asynchronous processing - continue working while transcription happens in the background
-- ⏱️ Elapsed time indicator during recording
-- 🛑 Automatic timeout to prevent unattended recordings
-- 🔍 Structured logging with file and console output
-- ⌨️ Customizable hotkeys
-- 💾 Transcript files saved alongside audio
+- Local voice-to-text transcription (no cloud required)
+- Multi-language support
+- Automatic clipboard copy
+- Asynchronous processing
+- Configurable recording timeout
+- Multiple transcription backends
 
 * Requirements
 
-** Common Dependencies
+** sox (required)
 
-All transcription methods require:
+#+begin_src bash
+brew install sox
+#+end_src
 
-1. [[https://sox.sourceforge.net/][sox]] - Audio recording tool
-   #+begin_src bash
-   brew install sox
-   #+end_src
+** Transcription Backend (choose one)
 
-** Transcription Backend (Choose One)
+*** WhisperKit CLI
 
-You must choose and install one of the following transcription backends:
+Apple-optimized implementation. Models download automatically on first use.
 
-*** Option 1: WhisperKit CLI
-
-[[https://github.com/argmaxinc/whisperkit-cli][whisperkit-cli]] - Apple's optimized Whisper implementation
-
-Installation:
 #+begin_src bash
 brew install whisperkit-cli
 #+end_src
 
-Models are downloaded automatically on first use. No additional setup required.
+Available models: =tiny=, =base=, =small=, =medium=, =large-v3= (best accuracy, slowest)
 
-*** Option 2: Whisper CLI (Default)
+*** Whisper CLI (default)
 
-[[https://github.com/ggerganov/whisper.cpp][whisper.cpp]] - C++ implementation of Whisper
+C++ implementation via [[https://github.com/ggerganov/whisper.cpp][whisper.cpp]]. Requires manual model download.
 
-Installation:
 #+begin_src bash
 brew install whisper-cli
-#+end_src
 
-You must manually download and install the desired model binary. Download available models from:
-https://huggingface.co/ggerganov/whisper.cpp/tree/main
-
-Example (for large-v3 model):
-#+begin_src bash
-mkdir -p /usr/local/whisper
-cd /usr/local/whisper
+# Download model
+mkdir -p /usr/local/whisper && cd /usr/local/whisper
 wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 #+end_src
 
-Then configure the model path in your Hammerspoon config:
-#+begin_src lua
-wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+*** Whisper Server
+
+Persistent HTTP server - fastest for repeated use since model stays loaded.
+
+#+begin_src bash
+# Build from whisper.cpp
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp && mkdir build && cd build
+cmake .. && cmake --build . --config Release
+
+# Download model (same as Whisper CLI)
 #+end_src
 
 * Installation
 
-1. Clone or download the Spoon into your Hammerspoon Spoons directory:
-   #+begin_src bash
-   ~/.hammerspoon/Spoons/hs_whisperDictation.spoon/
-   #+end_src
-
-2. Add to your Hammerspoon config (~/.hammerspoon/init.lua):
-
-*Using WhisperKit CLI (default)*:
-
-   #+begin_src lua
-   wd = hs.loadSpoon("hs_whisperDictation")
-   wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
-   wd.languages = {"en", "ja", "es", "fr"}
-   wd.transcriptionMethod = "whisperkitcli"
-   wd:bindHotKeys({
-       toggle = {{"ctrl", "cmd"}, "d"},
-       nextLang = {{"ctrl", "cmd"}, "l"},
-   })
-   wd:start()
-   #+end_src
-
-
-*Using Whisper CLI*:
-
-   #+begin_src lua
-   wd = hs.loadSpoon("hs_whisperDictation")
-   wd.transcriptionMethods.whispercli.config.cmd = "/opt/homebrew/bin/whisper-cli"
-   wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
-   wd.languages = {"en", "ja", "es", "fr"}
-   wd.transcriptionMethod = "whispercli"
-   wd:bindHotKeys({
-       toggle = {{"ctrl", "cmd"}, "d"},
-       nextLang = {{"ctrl", "cmd"}, "l"},
-   })
-   wd:start()
-   #+end_src
-
-3. Reload Hammerspoon configuration
-
-** Transcription Methods
-
-The Spoon supports multiple transcription backends. You must choose which one to use by setting =obj.transcriptionMethod=.
-
-*** Supported Methods
-
-**** =whisperkitcli=
-Uses [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI]]. Outputs transcription directly to stdout.
-
-Configuration:
-#+begin_src lua
-wd.transcriptionMethods.whisperkitcli.config = {
-  cmd = "/opt/homebrew/bin/whisperkit-cli",
-  model = "large-v3",  -- or "tiny", "base", "small", "medium"
-}
-wd.transcriptionMethod = "whisperkitcli"
-#+end_src
-
-**** =whispercli= (Default)
-Uses [[https://github.com/ggerganov/whisper.cpp][Whisper.cpp CLI]]. Creates a =.txt= file alongside the audio file.
-
-Configuration:
-#+begin_src lua
-wd.transcriptionMethods.whispercli.config = {
-  cmd = "/opt/homebrew/bin/whisper-cli",
-  modelPath = "/usr/local/whisper/ggml-large-v3.bin",
-}
-wd.transcriptionMethod = "whispercli"
-#+end_src
-
-** Customizable Properties
-
-| Property              | Type   | Default                 | Description                                                   |
-|-----------------------+--------+-------------------------+---------------------------------------------------------------|
-| =tempDir=             | string | "/tmp/whisper_dict"     | Temp directory for recordings                                 |
-| =recordCmd=           | string | "/opt/homebrew/bin/sox" | Path to sox binary                                            |
-| =transcriptionMethod= | string | "whispercli"            | Active transcription method ("whisperkitcli" or "whispercli") |
-| =languages=           | table  | {"en"}                  | List of supported languages                                   |
-| =timeoutSeconds=      | number | 1800                    | Auto-stop recording after N seconds. Set to nil to disable    |
-| =showRecordingIndicator= | bool   | true                    | Display large red circle in center of screen while recording  |
-| =recordingIndicatorStyle= | table  | See below               | Customize indicator fill color, stroke, and stroke width      |
-| =icons=               | table  | See below               | Emoji icons for UI states                                     |
-| =logger.enableConsole= | bool   | true                    | Print messages to Hammerspoon console                         |
-| =logger.enableFile=   | bool   | false                   | Write messages to log file                                    |
-| =logger.level=        | string | "INFO"                  | Log level: "DEBUG", "INFO", "WARN", or "ERROR"               |
-
-** Model Selection
-
-Model configuration depends on which transcription method you use.
-
-*** WhisperKit CLI
-Set the model string:
+Add to your =~/.hammerspoon/init.lua=:
 
 #+begin_src lua
-wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"  -- or "tiny", "base", "small", "medium"
-#+end_src
-
-Available models and their characteristics:
-
-| Model      | Accuracy | Speed   | Size  |
-|------------+----------+---------+-------|
-| tiny       | Low      | Fastest | 39M   |
-| base       | Fair     | Fast    | 140M  |
-| small      | Good     | Medium  | 466M  |
-| medium     | Better   | Slower  | 1.5G  |
-| large-v3   | Best     | Slowest | 2.9G  |
-
-⚠️ *Warning*: Transcription time depends heavily on the model chosen and the length of audio. Larger models provide better accuracy but take significantly longer to process. For example, a 10-second recording might take 5-10 seconds with "tiny" but several minutes with "large-v3" on standard hardware.
-
-⚠️ *First-Time Model Download*: The first time you use a model, it will be automatically downloaded (this happens only once). Download times vary by model size and internet speed. Ensure you have sufficient disk space and a stable internet connection when first running the Spoon with a new model.
-
-*** Whisper CLI
-Set the path to your pre-downloaded model binary:
-
-#+begin_src lua
-wd.transcriptionMethods.whispercli.config.modelPath = "/path/to/ggml-large-v3.bin"
-#+end_src
-
-Whisper.cpp models must be downloaded separately. See the [[https://github.com/ggerganov/whisper.cpp][whisper.cpp repository]] for available models.
-
-** Icon Customization
-
-You can customize the emoji icons used throughout the Spoon. Available icons are:
-
-| Icon              | Property        | Default | Usage                      |
-|-------------------+-----------------+---------+----------------------------|
-| =idle=            | obj.icons.idle  | 🎤      | Idle/ready state           |
-| =recording=       | obj.icons.recording | 🎙️      | During recording           |
-| =clipboard=       | obj.icons.clipboard | 📋      | Text copied to clipboard   |
-| =language=        | obj.icons.language | 🌐      | Language switching         |
-| =stopped=         | obj.icons.stopped | 🛑      | Recording stopped          |
-| =transcribing=    | obj.icons.transcribing | ⏳      | During transcription       |
-| =error=           | obj.icons.error | ❌      | Error notifications        |
-| =info=            | obj.icons.info  | ℹ️      | Info notifications         |
-
-Customize icons in your Hammerspoon config:
-
-#+begin_src lua
-wd.icons.idle = "🎙️"
-wd.icons.recording = "🔴"
-wd.icons.clipboard = "✅"
-#+end_src
-
-** Recording Indicator
-
-By default, a large red circle appears in the center of your screen while recording to provide visual feedback.
-
-*** Disabling the Indicator
-
-You can disable the visual indicator if preferred:
-
-#+begin_src lua
-wd.showRecordingIndicator = false  -- Disable the visual indicator
-#+end_src
-
-*** Customizing the Indicator Appearance
-
-You can customize the colors and stroke width of the recording indicator:
-
-#+begin_src lua
-wd.recordingIndicatorStyle = {
-  fillColor = {red = 1, green = 0, blue = 0, alpha = 0.7},    -- Fill color (RGBA)
-  strokeColor = {red = 1, green = 0, blue = 0, alpha = 1},    -- Stroke color (RGBA)
-  strokeWidth = 2,                                             -- Border width in pixels
-}
-#+end_src
-
-Color values are specified as RGBA (Red, Green, Blue, Alpha) with values from 0.0 to 1.0:
-
-#+begin_src lua
--- Example: Semi-transparent yellow circle with blue border
-wd.recordingIndicatorStyle = {
-  fillColor = {red = 1, green = 1, blue = 0, alpha = 0.6},
-  strokeColor = {red = 0, green = 0, blue = 1, alpha = 1},
-  strokeWidth = 3,
-}
-
--- Example: Green circle with no border
-wd.recordingIndicatorStyle = {
-  fillColor = {red = 0, green = 1, blue = 0, alpha = 0.7},
-  strokeColor = {red = 0, green = 1, blue = 0, alpha = 0},
-  strokeWidth = 0,
-}
-#+end_src
-
-** Recording Timeout
-
-To prevent unattended recordings from running indefinitely, the Spoon includes an automatic timeout feature. When enabled, recordings automatically stop after a specified duration.
-
-*** Configuration
-
-The timeout is controlled via the =timeoutSeconds= property:
-
-#+begin_src lua
-wd.timeoutSeconds = 300  -- Stop recording after 300 seconds (5 minutes) - DEFAULT
-#+end_src
-
-You can customize it to any duration:
-
-#+begin_src lua
-wd.timeoutSeconds = 60   -- Stop after 1 minute
-wd.timeoutSeconds = 600  -- Stop after 10 minutes
-wd.timeoutSeconds = nil  -- Disable timeout completely
-#+end_src
-
-*** Behavior
-
-- When the timeout is reached, recording automatically stops
-- A warning notification is shown: "🛑 Recording auto-stopped due to timeout (300s)"
-- The audio is transcribed and copied to clipboard, just like a manual stop
-- A log message is recorded for debugging
-
-*** Use Cases
-
-- **Security**: Prevent accidental long recordings consuming disk space or battery
-- **Automation**: Useful in scripts or automated workflows
-- **Safety**: Ensures unattended voice input doesn't run indefinitely
-
-** Hotkey Binding
-
-Define custom hotkeys using the =bindHotKeys()= method:
-
-#+begin_src lua
+wd = hs.loadSpoon("hs_whisperDictation")
+wd.languages = {"en", "ja", "es", "fr"}
 wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},      -- Start/stop recording
-    nextLang = {{"ctrl", "cmd"}, "l"},    -- Open language chooser
+    toggle = {{"ctrl", "cmd"}, "d"},
+    nextLang = {{"ctrl", "cmd"}, "l"},
 })
+wd:start()
 #+end_src
 
-** Logging Configuration
+** Backend Configuration
 
-By default, the logger outputs INFO-level and higher messages (INFO, WARN, ERROR) to the Hammerspoon console. This provides useful feedback without being too verbose.
-
-Default settings:
-- Console output: ✓ Enabled
-- File output: ✗ Disabled
-- Log level: INFO (shows INFO, WARN, ERROR; hides DEBUG)
-
-To customize:
-
+*WhisperKit CLI:*
 #+begin_src lua
--- Optional: Enable console logging (already enabled by default)
-wd.logger.enableConsole = true
-
--- Optional: Enable file logging for persistent records
-wd.logger.enableFile = true
-wd.logger.logFile = os.getenv("HOME") .. "/.hammerspoon/Spoons/hs_whisperDictation/whisper.log"
-
--- Optional: Set log level for maximum verbosity
--- Levels: DEBUG (most verbose), INFO (default), WARN, ERROR (least verbose)
-wd.logger:setLevel("DEBUG")
+wd.transcriptionMethod = "whisperkitcli"
+wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
 #+end_src
 
-*** Viewing Logs
+*Whisper CLI (default):*
+#+begin_src lua
+wd.transcriptionMethod = "whispercli"
+wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+#+end_src
 
-*Console Output* (recommended for troubleshooting):
-- Open Hammerspoon menu → Console to view messages
-- All messages appear here automatically (enableConsole is true by default)
-- Real-time feedback as you use the Spoon
+*Whisper Server:*
+#+begin_src lua
+wd.transcriptionMethod = "whisperserver"
+wd.serverConfig.executable = "/path/to/whisper-server"
+wd.serverConfig.modelPath = "/usr/local/whisper/ggml-large-v3-turbo.bin"
+#+end_src
 
-*File Output* (for persistent records):
-- View log file with: =tail -f ~/.hammerspoon/Spoons/hs_whisperDictation/whisper.log=
-- Useful for debugging issues that occur when console is not visible
-- Requires =enableFile = true= to be set
+* Configuration
+
+** Properties
+
+| Property                 | Default                 | Description                                             |
+|--------------------------+-------------------------+---------------------------------------------------------|
+| =transcriptionMethod=    | "whispercli"            | Backend: whisperkitcli/whispercli/whisperserver         |
+| =languages=              | {"en"}                  | Available languages                                     |
+| =tempDir=                | "/tmp/whisper_dict"     | Recording storage directory                             |
+| =timeoutSeconds=         | 1800                    | Auto-stop timeout (nil to disable)                      |
+| =showRecordingIndicator= | true                    | Show red circle while recording                         |
+
+For detailed customization (icons, indicator styling, logging, server config), see [[file:configuration.org][configuration.org]].
 
 * Usage
 
-** Starting Recording
+** Recording
 
-Click the menubar icon (🎤) or press your configured toggle hotkey (default: Ctrl+Cmd+D).
+1. Press toggle hotkey (default: Ctrl+Cmd+D) or click menubar icon to start
+2. Menubar shows elapsed time and language
+3. Press again to stop - audio is transcribed and copied to clipboard
 
-The menubar will update to show:
-- 🎙️ Recording indicator
-- Elapsed time in seconds
-- Current language code
+** Language Switching
 
-** Stopping Recording
-
-Click the menubar icon again or press the toggle hotkey.
-
-The audio is automatically transcribed asynchronously in the background, and the text is copied to your clipboard once transcription completes. You can continue working while transcription happens without waiting for it to finish.
-
-⚠️ *Warning*: It is technically possible to start a new recording while transcription is still in progress. However, the menubar interface may not properly reflect the current state in this scenario. Use with caution to avoid confusion.
-
-** Switching Languages
-
-Press your language switch hotkey (default: Ctrl+Cmd+L) to open a language chooser menu displaying all available languages. The currently active language is marked with a "✓ Selected" indicator.
-
-The menubar will update to show the new language code.
+Press language hotkey (default: Ctrl+Cmd+L) to open chooser.
 
 ** Files Generated
 
-Recordings and transcripts are stored in =tempDir=:
-
 #+begin_src
 /tmp/whisper_dict/
-├── en-20240101-120000.wav    # Audio file
+├── en-20240101-120000.wav    # Audio
 ├── en-20240101-120000.txt    # Transcript
-└── ...
 #+end_src
 
 * API Reference
 
-** Methods
+** Core Methods
 
-*** =start()=
-Initializes the Spoon and sets up the menubar.
+- =start()= - Initialize spoon and menubar
+- =stop()= - Clean up and remove menubar
+- =toggleTranscribe()= - Toggle recording on/off
+- =bindHotKeys(mapping)= - Bind hotkeys
 
-#+begin_src lua
-wd:start()
-#+end_src
-
-*** =stop()=
-Stops the Spoon, cleans up resources, and removes the menubar.
+** Recording with Callback
 
 #+begin_src lua
-wd:stop()
-#+end_src
-
-*** =beginTranscribe(callback)=
-Starts recording with an optional completion callback function. The callback is executed after transcription completes, receiving the transcribed text as a parameter.
-
-Parameters:
-- =callback= (optional): A function to execute when transcription completes. Receives the transcribed text as a parameter. If no callback is provided, the transcribed text is copied to clipboard (default behavior).
-
-When using a callback:
-- The callback is executed asynchronously after successful transcription
-- Any errors in the callback are caught and logged without interrupting the workflow
-- The transcribed text is NOT copied to clipboard when a callback is provided (callback is responsible for handling text)
-
-Examples:
-
-#+begin_src lua
--- Start recording with a completion callback
 wd:beginTranscribe(function(text)
-  print("Transcription complete: " .. text)
-  -- Custom logic here, e.g., send to API, format text, etc.
-  hs.pasteboard.setContents(text)  -- Or do something else
+  -- Custom handling instead of clipboard
+  print("Got: " .. text)
 end)
-
--- Or start recording without a callback (uses default behavior: copy to clipboard)
-wd:beginTranscribe()
-#+end_src
-
-*** =endTranscribe()=
-Stops recording and initiates transcription. The audio is automatically processed and, if no callback was set via =beginTranscribe()=, the result is copied to the clipboard.
-
-This method must be called after =beginTranscribe()= to complete the recording session.
-
-#+begin_src lua
--- Start recording
-wd:beginTranscribe()
-
--- ... (do your work while recording)
-
--- Stop recording and transcribe
+-- ... later ...
 wd:endTranscribe()
 #+end_src
 
-*** =toggleTranscribe()=
-Toggles recording on and off. When recording is stopped, automatically transcribes the audio and copies the result to the clipboard.
+** Server Methods (whisperserver only)
 
-This is a convenience method that calls either =beginTranscribe()= or =endTranscribe()= depending on the current recording state. It maintains backward compatibility with existing hotkey bindings and menuba interactions.
+=startServer()=, =stopServer()=, =isServerRunning()=, =ensureServer()= - See [[file:configuration.org][configuration.org]].
 
-Can be called directly as a method or bound to a hotkey.
-
-#+begin_src lua
--- Call directly
-wd:toggleTranscribe()
-
--- Or bind to a hotkey
-wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},
-    nextLang = {{"ctrl", "cmd"}, "l"},
-})
-#+end_src
-
-*** =bindHotKeys(mapping)=
-Binds hotkeys for controlling the Spoon.
+** Logger
 
 #+begin_src lua
-wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},
-    nextLang = {{"ctrl", "cmd"}, "l"},
-})
+wd.logger:setLevel("DEBUG")  -- DEBUG/INFO/WARN/ERROR
 #+end_src
-
-** Logger Methods
-
-The Spoon includes a custom logger accessible via =obj.logger=. All messages are printed to the Hammerspoon console by default (at INFO level or higher):
-
-- =logger:debug(msg)= - Debug level message (hidden by default, most verbose)
-- =logger:info(msg, showAlert)= - Info level message (shown by default, optional alert popup)
-- =logger:warn(msg, showAlert)= - Warning level message (always shown, shows alert popup by default)
-- =logger:error(msg, showAlert)= - Error level message (always shown, shows alert popup by default)
-- =logger:setLevel(level)= - Change log level: "DEBUG" (most verbose), "INFO" (default), "WARN", "ERROR" (least verbose)
-
-All messages output to:
-- **Console**: Hammerspoon menu → Console - enabled by default
-- **Log File**: =~/.hammerspoon/Spoons/hs_whisperDictation/whisper.log= - requires =enableFile = true=
 
 * Troubleshooting
 
-** Enabling Debug Logging
-
-For any issues, start by enabling verbose logging to see detailed messages in the Hammerspoon console:
+** Enable Debug Logging
 
 #+begin_src lua
 wd.logger:setLevel("DEBUG")
--- Then view messages: Hammerspoon menu → Console
+-- View: Hammerspoon menu → Console
 #+end_src
 
-All messages from the Spoon will appear in the console in real-time, showing exactly what's happening.
+** Common Issues
 
-** Transcription Method Not Found
+- *"recording command not found"*
+  - Check sox: =which sox=
 
-If you see an error about your transcription method not being found:
+- *"transcription method not found"*
+  - Check backend: =which whisperkit-cli= or =which whisper-cli=
 
-1. Check the Hammerspoon console for detailed error messages (Hammerspoon menu → Console)
-
-2. Verify you've selected the correct method:
-   #+begin_src lua
-   wd.transcriptionMethod = "whisperkitcli"  -- or "whispercli"
-   #+end_src
-
-3. Check the command path is correct for your system:
-   #+begin_src bash
-   which whisperkit-cli   # for whisperkitcli
-   which whisper-cli      # for whispercli
-   #+end_src
-
-4. Update the path in your config if needed:
-   #+begin_src lua
-   wd.transcriptionMethods.whisperkitcli.config.cmd = "/path/to/whisperkit-cli"
-   -- or
-   wd.transcriptionMethods.whispercli.config.cmd = "/path/to/whisper-cli"
-   #+end_src
-
-** "recording command not found"
-
-Similarly, check =sox= is installed:
+- *Empty transcription*
+  - Verify audio recorded:
 
 #+begin_src bash
-which sox
+ls -t /tmp/whisper_dict/*.wav | head -1
+afplay /tmp/whisper_dict/your-file.wav
 #+end_src
 
-Update the path if necessary:
+*- No audio*
+- Check microphone in System Preferences → Sound → Input
 
-#+begin_src lua
-wd.recordCmd = "/path/to/sox"
-#+end_src
+* Development
 
-** Transcription Produces Empty Output
-
-- Ensure your microphone is working and not muted
-- Check the Hammerspoon console for detailed error messages:
-  - Go to Hammerspoon menu → Console
-  - Look for error messages from WhisperDictation
-  - Enable DEBUG logging for maximum detail: =wd.logger:setLevel("DEBUG")=
-- Verify the audio file was actually recorded by listening to it:
-  #+begin_src bash
-  # Find the most recent audio file
-  ls -t /tmp/whisper_dict/*.wav | head -1
-  # Listen to it (verify you can hear your voice)
-  afplay /tmp/whisper_dict/en-20251024-171409.wav
-  #+end_src
-  If you can hear your voice, the microphone is working. If silent, the recording failed.
-- Alternatively, check the log file:
-  #+begin_src bash
-  tail -f ~/.hammerspoon/Spoons/hs_whisperDictation/whisper.log
-  #+end_src
-  (requires =wd.logger.enableFile = true=)
-- Try a longer recording (Whisper needs sufficient audio)
-
-** Audio Not Being Recorded
-
-- Check the Hammerspoon console (Hammerspoon menu → Console) for error messages about sox
-- Verify =sox= permissions:
-  #+begin_src bash
-  ls -la /opt/homebrew/bin/sox
-  #+end_src
-- Check microphone is selected in System Preferences → Sound → Input
-- Test recording manually:
-  #+begin_src bash
-  sox -d /tmp/test.wav
-  #+end_src
-- Enable DEBUG logging to see exactly what's happening:
-  #+begin_src lua
-  wd.logger:setLevel("DEBUG")
-  #+end_src
-  Then try recording again and check the console output
-
-* Architecture
-
-The Spoon follows a modular design with clear separation of concerns:
-
-** Component Overview
-
-*** Logger System
-Custom structured logging with support for multiple levels (DEBUG, INFO, WARN, ERROR) and outputs (console and file). Provides unified logging throughout the Spoon.
-
-*** Recording Manager
-Manages audio capture via =sox=. The =toggleRecord()= function:
-1. On first call: Starts recording to a timestamped .wav file
-2. Starts an elapsed time timer for menubar display
-3. On second call: Stops recording and passes audio to transcription
-
-*** Transcription Method System (Pluggable Architecture)
-Core innovation allowing multiple transcription backends without code duplication. Each method is self-contained with:
-
-**** Method Interface
-Each transcription method must implement:
-
-- =config=: Table containing method-specific configuration (paths, models, etc.)
-- =validate()=: Returns true if dependencies exist and are accessible
-- =buildCommand(audioFile, lang)=: Returns the command path and arguments table for execution
-- =processOutput(audioFile, exitCode, stdOut, stdErr)=: Processes command output and returns (success, text) tuple
-
-**** Built-in Methods
-
-| Method       | Input                | Output       | Use Case                          |
-|--------------+---------------------+--------------+-----------------------------------|
-| whisperkitcli | stdout streaming    | stdout       | Apple's optimized, auto-download  |
-| whispercli   | .txt file creation  | .wav.txt     | Local C++ implementation          |
-
-*** Language Manager
-Simple language selection system:
-- =obj.languages=: List of supported language codes
-- =obj.langIndex=: Currently selected language index
-- =showLanguageChooser()=: Interactive chooser menu
-
-*** Menubar Interface
-Provides visual status and interaction:
-- Displays current state (idle, recording with elapsed time, transcribing)
-- Shows active language code
-- Click to toggle recording
-
-** Data Flow
-
-#+begin_src
-User hotkey (toggle) → toggleRecord()
-  → startRecording() [sox -d file.wav]
-  → menubar shows recording + elapsed time
-  → User hotkey (toggle) again
-  → stopRecording()
-  → transcribe(audioFile)
-    → Get selected method from obj.transcriptionMethods[obj.transcriptionMethod]
-    → method:buildCommand(audioFile, lang) → command + args
-    → hs.task.new() → runs command asynchronously
-    → handleTranscriptionResult() callback
-      → method:processOutput() → extract text
-      → Save to .txt file
-      → Copy to clipboard
-      → Reset menubar to idle
-#+end_src
-
-** Extending with Custom Methods
-
-You can add custom transcription methods by adding them to =obj.transcriptionMethods=:
-
-#+begin_src lua
--- Example: Custom transcription method
-wd.transcriptionMethods.mymethod = {
-  name = "mymethod",
-  displayName = "My Custom Transcriber",
-  config = {
-    cmd = "/path/to/transcriber",
-    apiKey = "your-api-key",
-    -- Add any method-specific options
-  },
-
-  -- Check if the transcriber is available
-  validate = function(self)
-    return hs.fs.attributes(self.config.cmd) ~= nil
-  end,
-
-  -- Build the command to execute
-  -- Must return: commandPath, argsTable
-  buildCommand = function(self, audioFile, lang)
-    return self.config.cmd, {
-      "--audio", audioFile,
-      "--language", lang,
-      "--api-key", self.config.apiKey,
-    }
-  end,
-
-  -- Process the command output
-  -- Must return: (success, text) or (false, errorMessage)
-  processOutput = function(self, audioFile, exitCode, stdOut, stdErr)
-    if exitCode ~= 0 then
-      return false, "Transcriber failed: " .. (stdErr or "unknown error")
-    end
-
-    local text = stdOut or ""
-    if text == "" then
-      return false, "Empty transcription output"
-    end
-
-    return true, text
-  end,
-}
-
--- Select your custom method
-wd.transcriptionMethod = "mymethod"
-wd:start()
-#+end_src
+For architecture, extending with custom methods, and contributing, see [[file:development.org][development.org]].
 
 * License
 
 MIT License - See LICENSE file for details.
 
-* Contributing
-
-Bug reports and suggestions are welcome. Please open an issue or submit a pull request.
-
 * See Also
 
 - [[https://www.hammerspoon.org/][Hammerspoon Documentation]]
 - [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI Repository]]
-- [[https://github.com/openai/whisper][OpenAI Whisper Repository]]
+- [[https://github.com/ggerganov/whisper.cpp][whisper.cpp Repository]]
