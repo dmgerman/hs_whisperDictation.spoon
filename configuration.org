@@ -125,16 +125,26 @@ wd.serverConfig = {
 
 ** Server Lifecycle
 
-- *Auto-start*: Server starts when spoon starts
+- *Auto-start*: Server starts asynchronously when spoon starts (non-blocking)
 - *Auto-stop*: Server stops when spoon stops
 - *Auto-restart*: Server restarts on language change
 - *External servers*: If a server is already running on the port, it will be used (not stopped on spoon stop)
+- *Startup notifications*: Alerts shown when server is starting and when ready
 
 ** Manual Control
 
 #+begin_src lua
-wd:startServer()        -- Start server
-wd:stopServer()         -- Stop server (only if managed by spoon)
-wd:isServerRunning()    -- Check health
-wd:ensureServer()       -- Start if not running, wait until ready
+wd:startServer()           -- Start server asynchronously (non-blocking)
+wd:startServer(callback)   -- Start with callback: callback(success, error_message)
+wd:stopServer()            -- Stop server (only if managed by spoon)
+wd:isServerRunning()       -- Check health
+wd:ensureServer(callback)  -- Start if not running, callback when ready
 #+end_src
+
+** Transcription Before Server Ready
+
+If transcription is attempted before the server is ready:
+- An alert is shown: "Server starting... please try again when ready"
+- The transcription request fails gracefully
+- The server continues starting in the background
+- Once the server is ready, an alert shows: "Whisper server ready"

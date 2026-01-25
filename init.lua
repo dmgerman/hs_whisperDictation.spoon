@@ -57,6 +57,8 @@ obj.languages = {"en"}
 obj.langIndex = 1
 obj.showRecordingIndicator = true
 obj.timeoutSeconds = 1800  -- Auto-stop recording after 1800 seconds (30 minutes). Set to nil to disable.
+obj.retranscribeMethod = "whisperkitcli"  -- Backend used by transcribeLatestAgain()
+obj.retranscribeCount = 10                -- Number of recent recordings to show in chooser
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -189,11 +191,18 @@ obj.transcriptionMethods = {
     -- @param lang (string): Language code (currently unused, server uses loaded model)
     -- @param callback (function): Called with (success, text_or_error)
     transcribe = function(self, audioFile, lang, callback)
-      -- Ensure server is running before transcribing
+      -- Check server status before transcribing
       if not obj:isServerRunning() then
-        local started, err = obj:ensureServer()
-        if not started then
-          callback(false, "Server not available: " .. tostring(err))
+        if obj.serverStarting then
+          -- Server is starting, fail with message
+          hs.alert.show("Server is starting, please try again when ready")
+          callback(false, "Server is starting, please try again when ready")
+          return
+        else
+          -- Server not running and not starting, start it and fail current request
+          hs.alert.show("Server starting... please try again when ready")
+          obj:startServer()  -- Start async, no callback needed
+          callback(false, "Server starting... please try again when ready")
           return
         end
       end
@@ -342,6 +351,7 @@ obj.transcriptionCallback = nil
 -- Server state (for whisperserver method)
 obj.serverProcess = nil
 obj.serverCurrentLang = nil  -- Track language to detect when restart is needed
+obj.serverStarting = false   -- Track if server is currently starting (for async startup)
 
 -- === Helpers ===
 local function ensureDir(path)
@@ -355,6 +365,37 @@ end
 
 local function currentLang()
   return obj.languages[obj.langIndex]
+end
+
+--- Scan tempDir for recent .wav recordings, sorted by modification time (newest first).
+-- @param n (number): Maximum number of entries to return
+-- @return (table): Array of { path, filename } tables
+local function getRecentRecordings(n)
+  local recordings = {}
+  local iter, dirObj = hs.fs.dir(obj.tempDir)
+  if not iter then
+    return recordings
+  end
+  for filename in iter, dirObj do
+    if filename:match("%.wav$") then
+      local fullPath = obj.tempDir .. "/" .. filename
+      local attrs = hs.fs.attributes(fullPath)
+      if attrs then
+        table.insert(recordings, {
+          path = fullPath,
+          filename = filename,
+          modified = attrs.modification,
+          size = attrs.size,
+        })
+      end
+    end
+  end
+  table.sort(recordings, function(a, b) return a.modified > b.modified end)
+  local result = {}
+  for i = 1, math.min(n, #recordings) do
+    result[i] = recordings[i]
+  end
+  return result
 end
 
 local function updateMenu(title, tip)
@@ -490,10 +531,11 @@ function obj:isServerRunning()
   return ok == true
 end
 
---- Start the whisper server.
+--- Start the whisper server asynchronously.
 -- If a server is already running on the port (externally started), adopts it.
--- @return (boolean, string|nil): success, error message on failure
-function obj:startServer()
+-- @param callback (function|nil): Optional callback called with (success, error_message) when server is ready or fails
+-- @return (boolean, string|nil): success (immediate check), error message on failure
+function obj:startServer(callback)
   if self:isServerRunning() then
     -- Server already running - could be ours or external
     if self.serverProcess then
@@ -502,19 +544,29 @@ function obj:startServer()
       self.logger:info("Whisper server already running (external process)")
     end
     self.serverCurrentLang = currentLang()
+    if callback then callback(true, nil) end
     return true, nil
+  end
+
+  -- Check if server is already starting
+  if self.serverStarting then
+    hs.alert.show("Server already starting...")
+    self.logger:info("Server startup already in progress")
+    return false, "Server already starting"
   end
 
   local modelPath = getServerModelPath()
   if not modelPath then
     local err = "Whisper model not found at " .. self.serverConfig.modelPath
     self.logger:error(err, true)
+    if callback then callback(false, err) end
     return false, err
   end
 
   if not hs.fs.attributes(self.serverConfig.executable) then
     local err = "Whisper server executable not found at " .. self.serverConfig.executable
     self.logger:error(err, true)
+    if callback then callback(false, err) end
     return false, err
   end
 
@@ -531,11 +583,13 @@ function obj:startServer()
       self.logger:debug("Server stderr: " .. stdErr)
     end
     self.serverProcess = nil
+    self.serverStarting = false
   end, args)
 
   if not self.serverProcess then
     local err = "Failed to create server task"
     self.logger:error(err, true)
+    if callback then callback(false, err) end
     return false, err
   end
 
@@ -544,10 +598,47 @@ function obj:startServer()
     self.serverProcess = nil
     local errMsg = "Failed to start server: " .. tostring(err)
     self.logger:error(errMsg, true)
+    if callback then callback(false, errMsg) end
     return false, errMsg
   end
 
+  -- Mark server as starting and show alert
+  self.serverStarting = true
   self.serverCurrentLang = currentLang()
+  hs.alert.show("Starting whisper server...")
+
+  -- Start async polling to check when server is ready
+  local pollInterval = 0.5
+  local maxAttempts = math.ceil(self.serverConfig.startupTimeout / pollInterval)
+  local attempts = 0
+
+  local pollTimer
+  pollTimer = hs.timer.doEvery(pollInterval, function()
+    attempts = attempts + 1
+    if self:isServerRunning() then
+      -- Server is ready
+      pollTimer:stop()
+      self.serverStarting = false
+      self.logger:info("Whisper server ready")
+      hs.alert.show("Whisper server ready")
+      if callback then callback(true, nil) end
+    elseif attempts >= maxAttempts then
+      -- Timeout reached
+      pollTimer:stop()
+      self.serverStarting = false
+      local errMsg = "Server failed to start after " .. self.serverConfig.startupTimeout .. " seconds"
+      self.logger:error(errMsg, true)
+      if callback then callback(false, errMsg) end
+    elseif not self.serverProcess or not self.serverProcess:isRunning() then
+      -- Server process died
+      pollTimer:stop()
+      self.serverStarting = false
+      local errMsg = "Server process exited unexpectedly"
+      self.logger:error(errMsg, true)
+      if callback then callback(false, errMsg) end
+    end
+  end)
+
   return true, nil
 end
 
@@ -559,47 +650,35 @@ function obj:stopServer()
     self.serverProcess:terminate()
     self.serverProcess = nil
     self.serverCurrentLang = nil
+    self.serverStarting = false
   elseif self:isServerRunning() then
     self.logger:info("External whisper server running - not stopping (not managed by this spoon)")
   end
 end
 
 --- Ensure the whisper server is running, starting it if needed.
--- Waits for server to become healthy up to startupTimeout.
--- @return (boolean, string|nil): success, error message on failure
-function obj:ensureServer()
+-- This is now an async function that uses a callback.
+-- @param callback (function): Called with (success, error_message) when server is ready or fails
+function obj:ensureServer(callback)
   if self:isServerRunning() then
-    return true, nil
+    if callback then callback(true, nil) end
+    return
   end
 
-  local started, err = self:startServer()
-  if not started then
-    return false, err
+  if self.serverStarting then
+    if callback then callback(false, "Server is starting...") end
+    return
   end
 
-  -- Poll until server is healthy or timeout
-  local pollInterval = 0.5
-  local maxAttempts = math.ceil(self.serverConfig.startupTimeout / pollInterval)
-  local attempts = 0
-
-  while attempts < maxAttempts do
-    hs.timer.usleep(pollInterval * 1000000)  -- Convert to microseconds
-    attempts = attempts + 1
-    if self:isServerRunning() then
-      self.logger:info("Whisper server ready")
-      return true, nil
-    end
-  end
-
-  local errMsg = "Server failed to start after " .. self.serverConfig.startupTimeout .. " seconds"
-  self.logger:error(errMsg, true)
-  return false, errMsg
+  -- Start the server asynchronously
+  self:startServer(callback)
 end
 
 --- Restart the server if language has changed.
 -- Only relevant for whisperserver method.
 -- Note: External servers cannot be restarted - a warning is logged.
--- @return (boolean): true if restart was needed and successful, or not needed
+-- Note: Server startup is async - returns true if restart was initiated, server will notify when ready.
+-- @return (boolean): true if restart was initiated or not needed, false on immediate failure
 function obj:restartServerIfNeeded()
   if self.transcriptionMethod ~= "whisperserver" then
     return true
@@ -718,6 +797,74 @@ local function showLanguageChooser()
   chooser:show()
 end
 
+--- Re-transcribe a previously recorded audio file using the retranscribe backend.
+-- @param audioFile (string): Path to the WAV file
+-- @param lang (string): Language code extracted from the filename
+-- @param callback (function|nil): Optional callback receiving transcribed text
+local function retranscribe(audioFile, lang, callback)
+  local method = obj.transcriptionMethods[obj.retranscribeMethod]
+  if not method then
+    obj.logger:error("Unknown retranscription method: " .. obj.retranscribeMethod, true)
+    return
+  end
+
+  obj.transcriptionCallback = callback
+  local savedMethod = obj.transcriptionMethod
+  obj.transcriptionMethod = obj.retranscribeMethod
+
+  obj.logger:info(obj.icons.transcribing .. " Re-transcribing with " .. method.displayName .. " (" .. lang .. ")...", true)
+  updateMenu(obj.icons.idle .. " (" .. lang .. " T)", "Re-transcribing...")
+
+  method:transcribe(audioFile, lang, function(success, textOrError)
+    obj.transcriptionMethod = savedMethod
+    handleTranscriptionResult(success, textOrError, audioFile)
+  end)
+end
+
+--- Show a chooser with recent recordings for re-transcription.
+-- @param callback (function|nil): Optional callback receiving transcribed text
+local function showRetranscribeChooser(callback)
+  local recordings = getRecentRecordings(obj.retranscribeCount)
+  if #recordings == 0 then
+    obj.logger:warn("No recent recordings found in " .. obj.tempDir, true)
+    return
+  end
+
+  local choices = {}
+  for _, rec in ipairs(recordings) do
+    -- Parse filename pattern: {lang}-{YYYYMMDD-HHMMSS}.wav
+    local lang, dateStr, timeStr = rec.filename:match("^(%w+)-(%d%d%d%d%d%d%d%d)-(%d%d%d%d%d%d)%.wav$")
+    local displayText = rec.filename
+    if lang and dateStr and timeStr then
+      local y = dateStr:sub(1, 4)
+      local m = dateStr:sub(5, 6)
+      local d = dateStr:sub(7, 8)
+      local hh = timeStr:sub(1, 2)
+      local mm = timeStr:sub(3, 4)
+      local ss = timeStr:sub(5, 6)
+      local timestamp = os.time({year=tonumber(y), month=tonumber(m), day=tonumber(d),
+                                  hour=tonumber(hh), min=tonumber(mm), sec=tonumber(ss)})
+      displayText = lang .. " - " .. os.date("%b %d, %Y %H:%M:%S", timestamp)
+    end
+
+    table.insert(choices, {
+      text = displayText,
+      subText = rec.filename .. string.format(" (%.1f MB)", rec.size / (1024 * 1024)),
+      path = rec.path,
+      lang = lang or "en",
+    })
+  end
+
+  local chooser = hs.chooser.new(function(choice)
+    if choice then
+      retranscribe(choice.path, choice.lang, callback)
+    end
+  end)
+
+  chooser:choices(choices)
+  chooser:show()
+end
+
 -- === Public API ===
 function obj:beginTranscribe(callback)
   if self.recTask ~= nil then
@@ -777,6 +924,14 @@ function obj:toggleTranscribe()
   else
     self:endTranscribe()
   end
+  return self
+end
+
+--- Show a chooser with recent recordings and re-transcribe the selected one.
+-- @param callback (function|nil): Optional callback receiving transcribed text. If nil, copies to clipboard.
+-- @return self
+function obj:transcribeLatestAgain(callback)
+  showRetranscribeChooser(callback)
   return self
 end
 
@@ -851,6 +1006,9 @@ function obj:bindHotKeys(mapping)
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
+    elseif name == "retranscribe" then
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], function() obj:transcribeLatestAgain() end)
+      obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self
