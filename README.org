@@ -14,6 +14,7 @@ Records audio from your microphone, transcribes it locally, and copies the text 
 - Local voice-to-text transcription (no cloud required)
 - Multi-language support
 - Automatic clipboard copy
+- Smart auto-paste with activity monitoring
 - Asynchronous processing
 - Configurable recording timeout
 - Multiple transcription backends
@@ -77,6 +78,20 @@ wd:bindHotKeys({
 wd:start()
 #+end_src
 
+** With Auto-Paste Feature
+
+#+begin_src lua
+wd = hs.loadSpoon("hs_whisperDictation")
+wd.languages = {"en", "ja", "es", "fr"}
+wd.monitorUserActivity = true  -- Enable activity monitoring
+wd:bindHotKeys({
+    toggle = {{"ctrl", "cmd"}, "d"},        -- Copy mode
+    togglePaste = {{}, "F15"},              -- Auto-paste mode
+    nextLang = {{"ctrl", "cmd"}, "l"},
+})
+wd:start()
+#+end_src
+
 ** Backend Configuration
 
 *WhisperKit CLI:*
@@ -98,6 +113,101 @@ wd.serverConfig.executable = "/path/to/whisper-server"
 wd.serverConfig.modelPath = "/usr/local/whisper/ggml-large-v3-turbo.bin"
 #+end_src
 
+* Auto-Paste Feature
+
+The auto-paste feature automatically pastes transcribed text when you remain focused in the same application without typing or clicking during recording.
+
+** Setup
+
+Enable activity monitoring:
+
+#+begin_src lua
+wd.monitorUserActivity = true  -- Enable activity tracking
+wd:bindHotKeys({
+    toggle = {{"ctrl", "cmd"}, "d"},      -- Copy to clipboard only
+    togglePaste = {{"ctrl", "cmd"}, "p"}, -- Auto-paste mode
+    nextLang = {{"ctrl", "cmd"}, "l"},
+})
+#+end_src
+
+** How It Works
+
+*** Copy Mode (=toggle= hotkey)
+
+Press toggle hotkey → Record → Press again → Text copied to clipboard
+
+*** Auto-Paste Mode (=togglePaste= hotkey)
+
+Press togglePaste hotkey → Record → Press again → Smart behavior:
+
+*Text auto-pastes when:*
+- ✓ Same application is focused
+- ✓ At most 1 key pressed (just the stop key)
+- ✓ No mouse clicks
+- ✓ No application switches
+
+*Text stays in clipboard with warning when:*
+- ⚠ 2+ keys pressed (user was typing)
+- ⚠ Any mouse clicks detected
+- ⚠ Application switched during recording
+- ⚠ Different app focused at end
+
+** Activity Detection Details
+
+*** What Counts as Activity
+
+| Event Type       | Counts as Activity? | Notes                               |
+|------------------+---------------------+-------------------------------------|
+| Stop key press   | No                  | ≤1 non-modifier key allowed         |
+| Modifier keys    | No                  | Cmd, Ctrl, Alt, Shift don't count   |
+| Typing 2+ keys   | Yes                 | Real typing activity                |
+| Mouse clicks     | Yes                 | Left, right, middle button          |
+| Mouse movement   | No                  | Movement ignored                    |
+| App switch       | Yes                 | Switching to different application  |
+
+*** Examples
+
+#+begin_example
+# Scenario 1: No activity (auto-paste)
+Press F15 → Speak → Press F15 → Text pastes automatically ✓
+
+# Scenario 2: Typed while recording (clipboard only)
+Press F15 → Speak → Type "hello" → Press F15
+Warning: "User activity detected (5 keys) - text copied to clipboard"
+
+# Scenario 3: Clicked mouse (clipboard only)
+Press F15 → Speak → Click mouse → Press F15
+Warning: "User activity detected (1 click) - text copied to clipboard"
+
+# Scenario 4: Switched apps (clipboard only)
+Press F15 in Terminal → Speak → Switch to Chrome → Press F15
+Warning: "Application changed - text copied to clipboard"
+#+end_example
+
+** Advanced Usage
+
+*** Programmatic Auto-Paste
+
+#+begin_src lua
+-- Auto-paste mode
+wd:toggleTranscribe(true)
+
+-- Copy-only mode
+wd:toggleTranscribe(false)
+
+-- Custom callback (no activity tracking)
+wd:toggleTranscribe(function(text)
+  print("Transcribed: " .. text)
+end)
+#+end_src
+
+*** Configuration Options
+
+#+begin_src lua
+wd.monitorUserActivity = true  -- Enable/disable monitoring
+wd.autoPasteDelay = 0.1         -- Delay before paste (seconds)
+#+end_src
+
 * Configuration
 
 ** Properties
@@ -109,16 +219,39 @@ wd.serverConfig.modelPath = "/usr/local/whisper/ggml-large-v3-turbo.bin"
 | =tempDir=                | "/tmp/whisper_dict"     | Recording storage directory                             |
 | =timeoutSeconds=         | 1800                    | Auto-stop timeout (nil to disable)                      |
 | =showRecordingIndicator= | true                    | Show red circle while recording                         |
+| =monitorUserActivity=    | false                   | Enable activity monitoring for auto-paste               |
+| =autoPasteDelay=         | 0.1                     | Delay (seconds) before auto-paste                       |
 
 For detailed customization (icons, indicator styling, logging, server config), see [[file:configuration.org][configuration.org]].
 
 * Usage
 
+** Hotkeys
+
+| Hotkey        | Default Binding | Description                                    |
+|---------------+-----------------+------------------------------------------------|
+| =toggle=      | Ctrl+Cmd+D      | Toggle recording (copy to clipboard)           |
+| =togglePaste= | (not bound)     | Toggle recording with auto-paste               |
+| =nextLang=    | Ctrl+Cmd+L      | Open language chooser                          |
+| =retranscribe=| (not bound)     | Re-transcribe from recent recordings           |
+
 ** Recording
+
+*** Copy Mode (toggle hotkey)
 
 1. Press toggle hotkey (default: Ctrl+Cmd+D) or click menubar icon to start
 2. Menubar shows elapsed time and language
 3. Press again to stop - audio is transcribed and copied to clipboard
+
+*** Auto-Paste Mode (togglePaste hotkey)
+
+Requires =monitorUserActivity = true=
+
+1. Press togglePaste hotkey to start
+2. Speak your text
+3. Press again to stop
+4. If no activity detected and same app focused → text auto-pastes
+5. If activity detected → warning shown, text in clipboard only
 
 ** Language Switching
 
@@ -138,8 +271,32 @@ Press language hotkey (default: Ctrl+Cmd+L) to open chooser.
 
 - =start()= - Initialize spoon and menubar
 - =stop()= - Clean up and remove menubar
-- =toggleTranscribe()= - Toggle recording on/off
+- =toggleTranscribe([param])= - Toggle recording (see parameter overloading below)
 - =bindHotKeys(mapping)= - Bind hotkeys
+
+** Parameter Overloading
+
+The =toggleTranscribe()= method accepts different parameter types:
+
+*** No Parameter (default)
+#+begin_src lua
+wd:toggleTranscribe()  -- Copy to clipboard only
+#+end_src
+
+*** Boolean Parameter
+#+begin_src lua
+wd:toggleTranscribe(true)   -- Auto-paste if no activity
+wd:toggleTranscribe(false)  -- Copy to clipboard only (same as no param)
+#+end_src
+
+*** Function Parameter (callback)
+#+begin_src lua
+wd:toggleTranscribe(function(text)
+  -- Custom handling instead of clipboard
+  -- Note: Activity monitoring is disabled when using callback
+  print("Transcribed: " .. text)
+end)
+#+end_src
 
 ** Recording with Callback
 

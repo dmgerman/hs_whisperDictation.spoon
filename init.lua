@@ -9,12 +9,16 @@
 --- • Multiple languages (--language option or server restart)
 --- • Clipboard copy and character count summary
 --- • Multiple transcription backends: whisperkit-cli, whisper-cli, whisper-server
+--- • Optional activity monitoring: tracks keyboard/mouse/app switches during recording
+--- • Auto-paste mode: pastes text if no activity detected and same app is focused
 ---
 --- Usage:
 -- wd = hs.loadSpoon("hs_whisperDictation")
 -- wd.languages = {"en", "ja", "es", "fr"}
+-- wd.monitorUserActivity = true  -- Enable activity monitoring (optional)
 -- wd:bindHotKeys({
---    toggle = {dmg_all_keys, "l"},
+--    toggle = {dmg_all_keys, "l"},           -- Copy to clipboard only
+--    togglePaste = {dmg_all_keys, "p"},      -- Auto-paste if no activity detected
 --    nextLang = {dmg_all_keys, ";"},
 -- })
 -- wd:start()
@@ -59,6 +63,8 @@ obj.showRecordingIndicator = true
 obj.timeoutSeconds = 1800  -- Auto-stop recording after 1800 seconds (30 minutes). Set to nil to disable.
 obj.retranscribeMethod = "whisperkitcli"  -- Backend used by transcribeLatestAgain()
 obj.retranscribeCount = 10                -- Number of recent recordings to show in chooser
+obj.monitorUserActivity = false           -- Track keyboard/mouse/app activity during recording
+obj.autoPasteDelay = 0.1                  -- Delay in seconds before auto-pasting
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -353,6 +359,14 @@ obj.transcriptionCallback = nil
 obj.serverProcess = nil
 obj.serverStarting = false   -- Track if server is currently starting (for async startup)
 
+-- Activity monitoring state
+obj.activityWatcher = nil
+obj.appWatcher = nil
+obj.userActivityDetected = false
+obj.activityCounts = {keys = 0, clicks = 0, appSwitches = 0}
+obj.startingApp = nil
+obj.shouldPaste = false
+
 -- === Helpers ===
 local function ensureDir(path)
   hs.fs.mkdir(path)
@@ -449,6 +463,137 @@ local function hideRecordingIndicator()
   end
 end
 
+-- === Activity Monitoring ===
+
+--- Check if a key code corresponds to a modifier key.
+-- Modifier keys don't count toward activity (they're part of hotkey combos).
+-- @param keyCode (number): The key code from event:getKeyCode()
+-- @return (boolean): true if it's a modifier key
+local function isModifierKey(keyCode)
+  -- Modifier key codes on macOS:
+  -- 54 = Right Cmd, 55 = Left Cmd
+  -- 56 = Left Shift, 60 = Right Shift
+  -- 58 = Left Alt/Option, 61 = Right Alt/Option
+  -- 59 = Left Ctrl, 62 = Right Ctrl
+  -- 63 = Fn
+  local modifiers = {
+    [54] = true, [55] = true,  -- Cmd
+    [56] = true, [60] = true,  -- Shift
+    [58] = true, [61] = true,  -- Alt/Option
+    [59] = true, [62] = true,  -- Ctrl
+    [63] = true,               -- Fn
+  }
+  return modifiers[keyCode] == true
+end
+
+--- Start monitoring user activity (keyboard, mouse clicks, app switches).
+local function startActivityMonitoring()
+  -- Reset activity state
+  obj.userActivityDetected = false
+  obj.activityCounts = {keys = 0, clicks = 0, appSwitches = 0}
+
+  -- Track starting application
+  local focusedWindow = hs.window.focusedWindow()
+  obj.startingApp = focusedWindow and focusedWindow:application()
+
+  -- Start eventtap for keyboard and mouse events
+  local events = {
+    hs.eventtap.event.types.keyDown,
+    hs.eventtap.event.types.leftMouseDown,
+    hs.eventtap.event.types.rightMouseDown,
+    hs.eventtap.event.types.otherMouseDown,
+  }
+
+  obj.activityWatcher = hs.eventtap.new(events, function(event)
+    local eventType = event:getType()
+
+    if eventType == hs.eventtap.event.types.keyDown then
+      -- Only count non-modifier keys
+      -- This way Cmd+L counts as 1 key (L), not 2 (Cmd + L)
+      local keyCode = event:getKeyCode()
+      if not isModifierKey(keyCode) then
+        obj.activityCounts.keys = obj.activityCounts.keys + 1
+        obj.userActivityDetected = true
+      end
+    else
+      -- Mouse click
+      obj.activityCounts.clicks = obj.activityCounts.clicks + 1
+      obj.userActivityDetected = true
+    end
+
+    -- Don't block the event
+    return false
+  end)
+
+  obj.activityWatcher:start()
+
+  -- Start application watcher for app switches
+  obj.appWatcher = hs.application.watcher.new(function(appName, eventType, app)
+    if eventType == hs.application.watcher.activated then
+      -- Check if switched to a different app
+      if obj.startingApp and app and app:bundleID() ~= obj.startingApp:bundleID() then
+        obj.activityCounts.appSwitches = obj.activityCounts.appSwitches + 1
+        obj.userActivityDetected = true
+      end
+    end
+  end)
+
+  obj.appWatcher:start()
+  obj.logger:debug("Activity monitoring started")
+end
+
+--- Stop activity monitoring.
+local function stopActivityMonitoring()
+  if obj.activityWatcher then
+    obj.activityWatcher:stop()
+    obj.activityWatcher = nil
+  end
+
+  if obj.appWatcher then
+    obj.appWatcher:stop()
+    obj.appWatcher = nil
+  end
+
+  obj.logger:debug("Activity monitoring stopped")
+end
+
+--- Get a human-readable summary of detected activity.
+-- @return (string): Summary like "3 keys, 2 clicks, 1 app switch"
+local function getActivitySummary()
+  local parts = {}
+  local c = obj.activityCounts
+
+  if c.keys > 0 then
+    local keyDesc = c.keys == 1 and "1 key" or string.format("%d keys", c.keys)
+    table.insert(parts, keyDesc)
+  end
+  if c.clicks > 0 then
+    table.insert(parts, string.format("%d click%s", c.clicks, c.clicks == 1 and "" or "s"))
+  end
+  if c.appSwitches > 0 then
+    table.insert(parts, string.format("%d app switch%s", c.appSwitches, c.appSwitches == 1 and "" or "es"))
+  end
+
+  return #parts > 0 and table.concat(parts, ", ") or "no activity"
+end
+
+--- Check if current focused app matches the starting app.
+-- @return (boolean): true if same app is focused
+local function isSameAppFocused()
+  if not obj.startingApp then
+    return false
+  end
+
+  local focusedWindow = hs.window.focusedWindow()
+  local currentApp = focusedWindow and focusedWindow:application()
+
+  if not currentApp then
+    return false
+  end
+
+  return currentApp:bundleID() == obj.startingApp:bundleID()
+end
+
 local function startRecordingSession()
   -- Start elapsed time display timer
   obj.startTime = os.time()
@@ -469,6 +614,11 @@ local function startRecordingSession()
   -- Show recording indicator if enabled
   if obj.showRecordingIndicator then
     showRecordingIndicator()
+  end
+
+  -- Start activity monitoring if enabled and not using callback
+  if obj.monitorUserActivity and not obj.transcriptionCallback then
+    startActivityMonitoring()
   end
 end
 
@@ -495,6 +645,11 @@ local function stopRecordingSession()
 
   -- Hide recording indicator
   hideRecordingIndicator()
+
+  -- Stop activity monitoring if enabled
+  if obj.monitorUserActivity and (obj.activityWatcher or obj.appWatcher) then
+    stopActivityMonitoring()
+  end
 
   -- Reset menu to idle state
   resetMenuToIdle()
@@ -707,14 +862,44 @@ local function handleTranscriptionResult(success, textOrError, audioFile)
     end
     obj.transcriptionCallback = nil
   else
-    -- Only copy to clipboard if no callback was provided (preserves default behavior)
+    -- Copy to clipboard
     local ok, errPB = pcall(hs.pasteboard.setContents, text)
     if not ok then
       obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
       resetMenuToIdle()
       return
     end
-    obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
+
+    -- Handle auto-paste logic if requested
+    if obj.shouldPaste then
+      local c = obj.activityCounts
+      local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
+
+      if obj.monitorUserActivity and hasActivity then
+        -- Activity detected - warn and skip paste
+        local summary = getActivitySummary()
+        obj.logger:warn(
+          "⚠️  User activity detected during recording (" .. summary .. ") - text copied to clipboard (not pasted)",
+          true
+        )
+      elseif obj.monitorUserActivity and not isSameAppFocused() then
+        -- Different app focused - skip paste
+        obj.logger:warn(
+          "⚠️  Application changed during recording - text copied to clipboard (not pasted)",
+          true
+        )
+      else
+        -- No activity (or monitoring disabled) and same app - auto-paste
+        obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars) - pasting...", true)
+        hs.timer.doAfter(obj.autoPasteDelay, function()
+          hs.eventtap.keyStroke({"cmd"}, "v")
+        end)
+      end
+      obj.shouldPaste = false
+    else
+      -- Normal mode - just copy to clipboard
+      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
+    end
   end
 
   resetMenuToIdle()
@@ -833,10 +1018,26 @@ local function showRetranscribeChooser(callback)
 end
 
 -- === Public API ===
-function obj:beginTranscribe(callback)
+
+--- Begin transcription with optional callback or auto-paste flag.
+-- @param callbackOrPaste (function|boolean|nil): If function, uses callback. If true, enables auto-paste. If nil/false, clipboard only.
+-- @return self
+function obj:beginTranscribe(callbackOrPaste)
   if self.recTask ~= nil then
     self.logger:warn("Recording already in progress", true)
     return self
+  end
+
+  -- Parse parameter: boolean vs callback
+  if type(callbackOrPaste) == "function" then
+    self.transcriptionCallback = callbackOrPaste
+    self.shouldPaste = false
+  elseif type(callbackOrPaste) == "boolean" then
+    self.transcriptionCallback = nil
+    self.shouldPaste = callbackOrPaste
+  else
+    self.transcriptionCallback = nil
+    self.shouldPaste = false
   end
 
   ensureDir(self.tempDir)
@@ -860,7 +1061,6 @@ function obj:beginTranscribe(callback)
   end
 
   self.currentAudioFile = audioFile
-  self.transcriptionCallback = callback
   startRecordingSession()
   return self
 end
@@ -885,9 +1085,12 @@ function obj:endTranscribe()
   return self
 end
 
-function obj:toggleTranscribe()
+--- Toggle transcription with optional callback or auto-paste flag.
+-- @param callbackOrPaste (function|boolean|nil): If function, uses callback. If true, enables auto-paste. If nil/false, clipboard only.
+-- @return self
+function obj:toggleTranscribe(callbackOrPaste)
   if self.recTask == nil then
-    self:beginTranscribe()
+    self:beginTranscribe(callbackOrPaste)
   else
     self:endTranscribe()
   end
@@ -970,6 +1173,9 @@ function obj:bindHotKeys(mapping)
     if name == "toggle" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Toggle whisper transcription [Audio]", function() obj:toggleTranscribe() end)
       obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
+    elseif name == "togglePaste" then
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Toggle whisper transcription with auto-paste [Audio]", function() obj:toggleTranscribe(true) end)
+      obj.logger:debug("Bound hotkey: togglePaste to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select whisper language for transcription [Audio]", showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
