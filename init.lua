@@ -188,7 +188,7 @@ obj.transcriptionMethods = {
     end,
     --- Transcribe audio file by sending to whisper server via HTTP POST.
     -- @param audioFile (string): Path to the WAV file
-    -- @param lang (string): Language code (currently unused, server uses loaded model)
+    -- @param lang (string): Language code for transcription
     -- @param callback (function): Called with (success, text_or_error)
     transcribe = function(self, audioFile, lang, callback)
       -- Check server status before transcribing
@@ -212,6 +212,7 @@ obj.transcriptionMethods = {
         "-s", "-X", "POST", serverUrl,
         "-F", string.format("file=@%s", audioFile),
         "-F", "response_format=text",
+        "-F", string.format("language=%s", lang),
       }
       obj.logger:info("Running: " .. obj.serverConfig.curlCmd .. " " .. table.concat(args, " "))
       local task = hs.task.new(obj.serverConfig.curlCmd, function(exitCode, stdOut, stdErr)
@@ -350,7 +351,6 @@ obj.transcriptionCallback = nil
 
 -- Server state (for whisperserver method)
 obj.serverProcess = nil
-obj.serverCurrentLang = nil  -- Track language to detect when restart is needed
 obj.serverStarting = false   -- Track if server is currently starting (for async startup)
 
 -- === Helpers ===
@@ -543,7 +543,6 @@ function obj:startServer(callback)
     else
       self.logger:info("Whisper server already running (external process)")
     end
-    self.serverCurrentLang = currentLang()
     if callback then callback(true, nil) end
     return true, nil
   end
@@ -604,7 +603,6 @@ function obj:startServer(callback)
 
   -- Mark server as starting and show alert
   self.serverStarting = true
-  self.serverCurrentLang = currentLang()
   hs.alert.show("Starting whisper server...")
 
   -- Start async polling to check when server is ready
@@ -649,7 +647,6 @@ function obj:stopServer()
     self.logger:info("Stopping whisper server")
     self.serverProcess:terminate()
     self.serverProcess = nil
-    self.serverCurrentLang = nil
     self.serverStarting = false
   elseif self:isServerRunning() then
     self.logger:info("External whisper server running - not stopping (not managed by this spoon)")
@@ -672,34 +669,6 @@ function obj:ensureServer(callback)
 
   -- Start the server asynchronously
   self:startServer(callback)
-end
-
---- Restart the server if language has changed.
--- Only relevant for whisperserver method.
--- Note: External servers cannot be restarted - a warning is logged.
--- Note: Server startup is async - returns true if restart was initiated, server will notify when ready.
--- @return (boolean): true if restart was initiated or not needed, false on immediate failure
-function obj:restartServerIfNeeded()
-  if self.transcriptionMethod ~= "whisperserver" then
-    return true
-  end
-  if self.serverCurrentLang == currentLang() then
-    return true  -- No restart needed
-  end
-  if not self.serverProcess and self:isServerRunning() then
-    -- External server - can't restart it
-    self.logger:warn("Language changed but using external server - cannot restart. Transcription may use wrong language.")
-    self.serverCurrentLang = currentLang()
-    return true
-  end
-  if not self.serverProcess then
-    return true  -- No server running, will be started on next transcription
-  end
-
-  self.logger:info("Language changed, restarting server")
-  self:stopServer()
-  local started, _ = self:startServer()
-  return started
 end
 
 -- === Transcription Handling ===
@@ -786,8 +755,6 @@ local function showLanguageChooser()
     if choice then
       obj.langIndex = choice.index
       obj.logger:info(obj.icons.language .. " Language switched to: " .. choice.lang, true)
-      -- Restart server if using whisperserver method and language changed
-      obj:restartServerIfNeeded()
       resetMenuToIdle()
     end
   end)
