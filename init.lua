@@ -1001,13 +1001,13 @@ function obj:bindHotKeys(mapping)
   for name, spec in pairs(map) do
     if obj.hotkeys[name] then obj.hotkeys[name]:delete() end
     if name == "toggle" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], function() obj:toggleTranscribe() end)
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Toggle whisper transcription [Audio]", function() obj:toggleTranscribe() end)
       obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "nextLang" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], showLanguageChooser)
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select whisper language for transcription [Audio]", showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     elseif name == "retranscribe" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], function() obj:transcribeLatestAgain() end)
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Retranscribe latest audio [Audio]", function() obj:transcribeLatestAgain() end)
       obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
