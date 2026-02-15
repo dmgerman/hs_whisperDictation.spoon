@@ -456,20 +456,11 @@ local function resetMenuToIdle()
 end
 
 local function updateElapsed()
-  if obj.startTime then
-    local totalElapsed = os.difftime(os.time(), obj.startTime)
-
-    -- Only show chunk info if using continuous backend (not sox)
-    if obj.recordingBackend ~= "sox" and obj.chunkCount > 0 then
-      local chunkElapsed = obj.currentChunkStartTime and os.difftime(os.time(), obj.currentChunkStartTime) or 0
-      updateMenu(
-        string.format(obj.icons.recording .. " Chunk %d (%ds/%ds) (%s)",
-                     obj.chunkCount + 1, chunkElapsed, totalElapsed, currentLang()),
-        "Recording..."
-      )
-    else
-      updateMenu(string.format(obj.icons.recording .. " %ds (%s)", totalElapsed, currentLang()), "Recording...")
-    end
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  if backend and backend:isRecording() then
+    -- Backend manages all state and returns display text
+    local displayText = backend:getRecordingDisplayText(currentLang())
+    updateMenu(displayText, "Recording...")
   end
 end
 
@@ -895,6 +886,90 @@ end
 -- @param success (boolean): Whether transcription succeeded
 -- @param textOrError (string): Transcribed text on success, error message on failure
 -- @param audioFile (string): Path to the audio file (for saving transcript)
+--- Handle completed transcription (common logic for both backends).
+-- @param fullText (string): Complete transcribed text
+-- @param audioFile (string|nil): Path to audio file (for saving .txt)
+-- @param chunkCount (number): Number of chunks (1 for sox, N for pythonstream)
+local function handleTranscriptionComplete(fullText, audioFile, chunkCount)
+  local charCount = #fullText
+
+  -- Save transcription to .txt file
+  if audioFile then
+    local txtFile = audioFile:gsub("%.wav$", ".txt")
+    local f, err = io.open(txtFile, "w")
+    if f then
+      f:write(fullText)
+      f:close()
+      obj.logger:debug("Transcript written to file: " .. txtFile)
+    else
+      obj.logger:warn("Failed to save transcription file: " .. tostring(err))
+    end
+  end
+
+  -- Handle callback if provided
+  if obj.transcriptionCallback then
+    local ok, callbackErr = pcall(obj.transcriptionCallback, fullText)
+    if not ok then
+      obj.logger:error("Callback error: " .. tostring(callbackErr))
+    end
+    obj.transcriptionCallback = nil
+
+    -- Show completion message (no clipboard/paste)
+    local message = chunkCount == 1
+      and string.format("Transcription complete: %d characters", charCount)
+      or string.format("Transcription complete: %d chunks, %d characters", chunkCount, charCount)
+    hs.alert.show(message, 5.0)
+    obj.logger:info(message)
+    resetMenuToIdle()
+    return
+  end
+
+  -- No callback - copy to clipboard
+  local ok, err = pcall(hs.pasteboard.setContents, fullText)
+  if not ok then
+    obj.logger:error("Failed to copy to clipboard: " .. tostring(err), true)
+    resetMenuToIdle()
+    return
+  end
+
+  -- Format completion message
+  local message = chunkCount == 1
+    and string.format("Transcription complete: %d characters", charCount)
+    or string.format("Transcription complete: %d chunks, %d characters", chunkCount, charCount)
+
+  -- Handle auto-paste if enabled
+  if obj.shouldPaste then
+    local c = obj.activityCounts
+    local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
+
+    if obj.monitorUserActivity and hasActivity then
+      local summary = getActivitySummary()
+      obj.logger:warn(
+        "⚠️  User activity detected during recording (" .. summary .. ") - text copied to clipboard (not pasted)",
+        true
+      )
+    elseif obj.monitorUserActivity and not isSameAppFocused() then
+      obj.logger:warn(
+        "⚠️  Application changed during recording - text copied to clipboard (not pasted)",
+        true
+      )
+    else
+      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars) - pasting...", true)
+      hs.timer.doAfter(obj.autoPasteDelay, function()
+        smartPaste()
+      end)
+    end
+    obj.shouldPaste = false
+  else
+    obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars)", true)
+  end
+
+  hs.alert.show(message, 5.0)
+  obj.logger:info(message)
+  resetMenuToIdle()
+end
+
+--- Handle transcription result for sox backend (single file).
 local function handleTranscriptionResult(success, textOrError, audioFile)
   local method = obj.transcriptionMethods[obj.transcriptionMethod]
 
@@ -904,68 +979,8 @@ local function handleTranscriptionResult(success, textOrError, audioFile)
     return
   end
 
-  local text = textOrError
-
-  -- Save transcript to file
-  local outputFile = audioFile:gsub("%.wav$", ".txt")
-  local f, err = io.open(outputFile, "w")
-  if f then
-    f:write(text)
-    f:close()
-    obj.logger:debug("Transcript written to file: " .. outputFile)
-  else
-    obj.logger:warn("Could not save transcript file: " .. tostring(err))
-  end
-
-  -- Call the callback if one was provided
-  if obj.transcriptionCallback then
-    local ok, callbackErr = pcall(obj.transcriptionCallback, text)
-    if not ok then
-      obj.logger:error("Callback error: " .. tostring(callbackErr))
-    end
-    obj.transcriptionCallback = nil
-  else
-    -- Copy to clipboard
-    local ok, errPB = pcall(hs.pasteboard.setContents, text)
-    if not ok then
-      obj.logger:error("Failed to copy to clipboard: " .. tostring(errPB), true)
-      resetMenuToIdle()
-      return
-    end
-
-    -- Handle auto-paste logic if requested
-    if obj.shouldPaste then
-      local c = obj.activityCounts
-      local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
-
-      if obj.monitorUserActivity and hasActivity then
-        -- Activity detected - warn and skip paste
-        local summary = getActivitySummary()
-        obj.logger:warn(
-          "⚠️  User activity detected during recording (" .. summary .. ") - text copied to clipboard (not pasted)",
-          true
-        )
-      elseif obj.monitorUserActivity and not isSameAppFocused() then
-        -- Different app focused - skip paste
-        obj.logger:warn(
-          "⚠️  Application changed during recording - text copied to clipboard (not pasted)",
-          true
-        )
-      else
-        -- No activity (or monitoring disabled) and same app - auto-paste
-        obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars) - pasting...", true)
-        hs.timer.doAfter(obj.autoPasteDelay, function()
-          smartPaste()
-        end)
-      end
-      obj.shouldPaste = false
-    else
-      -- Normal mode - just copy to clipboard
-      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars)", true)
-    end
-  end
-
-  resetMenuToIdle()
+  -- Single file transcription complete - use common handler
+  handleTranscriptionComplete(textOrError, audioFile, 1)
 end
 
 --- Transcribe an audio file using the selected method.
@@ -1107,6 +1122,7 @@ local function isStillRecording()
 end
 
 --- Finalize transcription - concatenate all chunks and copy to clipboard.
+--- Finalize transcription for pythonstream backend (concatenate chunks).
 local function finalizeTranscription()
   print(string.format("[DEBUG] finalizeTranscription: chunkCount=%d", obj.chunkCount))
 
@@ -1117,70 +1133,12 @@ local function finalizeTranscription()
     return
   end
 
+  -- Concatenate all chunks
   local fullText = concatenateChunks()
-  local charCount = #fullText
-  print(string.format("[DEBUG] Concatenated text length: %d", charCount))
+  print(string.format("[DEBUG] Concatenated text length: %d", #fullText))
 
-  -- Save transcription to .txt file (matching complete WAV file)
-  if obj.completeRecordingFile then
-    local txtFile = obj.completeRecordingFile:gsub("%.wav$", ".txt")
-    local f, err = io.open(txtFile, "w")
-    if f then
-      f:write(fullText)
-      f:close()
-      print(string.format("[DEBUG] Transcription saved to: %s", txtFile))
-    else
-      obj.logger:warn("Failed to save transcription file: " .. tostring(err))
-    end
-  end
-
-  local ok, err = pcall(hs.pasteboard.setContents, fullText)
-  if not ok then
-    obj.logger:error("Failed to copy to clipboard: " .. tostring(err), true)
-    return
-  end
-  print("[DEBUG] Text copied to clipboard successfully")
-
-  -- Show different message for single vs multiple chunks
-  local message
-  if obj.chunkCount == 1 then
-    message = string.format("Transcription complete: %d characters", charCount)
-  else
-    message = string.format("Transcription complete: %d chunks, %d characters", obj.chunkCount, charCount)
-  end
-
-  -- Handle auto-paste if enabled
-  if obj.shouldPaste then
-    local c = obj.activityCounts
-    local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
-
-    if obj.monitorUserActivity and hasActivity then
-      -- Activity detected - warn and skip paste
-      local summary = getActivitySummary()
-      obj.logger:warn(
-        "⚠️  User activity detected during recording (" .. summary .. ") - text copied to clipboard (not pasted)",
-        true
-      )
-    elseif obj.monitorUserActivity and not isSameAppFocused() then
-      -- Different app focused - skip paste
-      obj.logger:warn(
-        "⚠️  Application changed during recording - text copied to clipboard (not pasted)",
-        true
-      )
-    else
-      -- Auto-paste after delay
-      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars) - pasting...", true)
-      hs.timer.doAfter(obj.autoPasteDelay, function()
-        smartPaste()
-      end)
-    end
-    obj.shouldPaste = false
-  end
-
-  print(string.format("[DEBUG] Showing completion alert: %s", message))
-  hs.alert.show(message, 5.0)
-  obj.logger:info(message)
-  resetMenuToIdle()
+  -- Use common handler for completion
+  handleTranscriptionComplete(fullText, obj.completeRecordingFile, obj.chunkCount)
 end
 
 --- Check if all pending transcriptions are complete and finalize if done.
@@ -1229,11 +1187,9 @@ local function handleChunkTranscriptionSuccess(chunkNum, text)
   obj.completedChunks[chunkNum] = text
   obj.allChunksText[chunkNum] = text
 
-  -- Only show chunk number if using continuous backend (not sox)
-  if obj.recordingBackend ~= "sox" then
-    print(string.format("[DEBUG] Showing chunk alert for chunk %d", chunkNum))
-    hs.alert.show(string.format("Chunk %d: %s", chunkNum, text), obj.chunkAlertDuration)
-  end
+  -- Show chunk alert (all backends can show this, it's just informational)
+  print(string.format("[DEBUG] Showing chunk alert for chunk %d", chunkNum))
+  hs.alert.show(string.format("Chunk %d: %s", chunkNum, text), obj.chunkAlertDuration)
   obj.logger:info(string.format("Chunk %d transcribed (%d chars)", chunkNum, #text))
 
   print(string.format("[DEBUG] Calling checkIfTranscriptionComplete"))
@@ -1588,36 +1544,35 @@ function obj:start()
     end
   end
 
-  -- Start persistent Python stream server asynchronously if using pythonstream backend
-  if obj.recordingBackend == "pythonstream" then
-    obj.logger:info("Starting Python stream server in background...")
+  -- Start recording backend server asynchronously
+  -- (backends without servers will return true immediately)
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  if backend then
     ensureDir(obj.tempDir)
 
     -- Start server asynchronously to avoid blocking Hammerspoon startup
     -- Store timer to prevent garbage collection
     obj.serverStartupTimer = hs.timer.doAfter(0.5, function()
-      obj.logger:info("[ASYNC] Server startup callback executing...")
+      obj.logger:info("[ASYNC] Backend startup callback executing...")
       local ok, err = pcall(function()
-        local backend = obj.recordingBackends.pythonstream
-        obj.logger:info("[ASYNC] Calling backend:startServer()...")
         local started, startErr = backend:startServer(obj.tempDir, currentLang())
-        obj.logger:info("[ASYNC] startServer returned: " .. tostring(started))
         if not started then
           local errorMsg = tostring(startErr)
-          obj.logger:warn("Python stream server not started: " .. errorMsg .. " (will start on first recording)")
+          obj.logger:warn("Recording backend not started: " .. errorMsg .. " (will start on first recording)")
           -- Show alert for port conflicts (user needs to know immediately)
           if errorMsg:match("Port.*in use") or errorMsg:match("already in use") then
-            hs.alert.show("⚠️ Python stream server: " .. errorMsg, 5)
+            hs.alert.show("⚠️ Recording backend: " .. errorMsg, 5)
           end
         else
-          obj.logger:info("Python stream server ready")
+          if backend:isServerRunning() then
+            obj.logger:info("Recording server ready")
+          end
         end
       end)
       if not ok then
-        obj.logger:error("Python stream server async startup failed: " .. tostring(err))
-        hs.alert.show("⚠️ Python stream server failed\nSee console for details", 3)
+        obj.logger:error("Recording backend async startup failed: " .. tostring(err))
+        hs.alert.show("⚠️ Recording backend failed\nSee console for details", 3)
       end
-      obj.logger:info("[ASYNC] Server startup callback complete")
     end)
   end
 
@@ -1628,16 +1583,14 @@ end
 function obj:stop()
   obj.logger:info("Stopping WhisperDictation")
 
-  -- Stop the whisper server if running
+  -- Stop the whisper transcription server if running
   obj:stopServer()
 
-  -- Stop Python stream server if running
-  if obj.recordingBackend == "pythonstream" then
-    local backend = obj.recordingBackends.pythonstream
-    if backend:isServerRunning() then
-      obj.logger:info("Stopping Python stream server...")
-      backend:stopServer()
-    end
+  -- Stop recording backend server if running
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  if backend and backend:isServerRunning() then
+    obj.logger:info("Stopping recording server...")
+    backend:stopServer()
   end
 
   if obj.menubar then

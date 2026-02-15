@@ -28,6 +28,7 @@ RecordingBackends.sox = {
   _callback = nil,
   _audioFile = nil,
   _stopping = false,
+  _startTime = nil,  -- Track recording start time
 
   validate = function(self)
     return hs.fs.attributes(self.config.cmd) ~= nil
@@ -40,6 +41,7 @@ RecordingBackends.sox = {
 
     self._callback = callback
     self._stopping = false
+    self._startTime = os.time()  -- Track start time
 
     -- Generate timestamped filename
     local timestamp = os.date("%Y%m%d-%H%M%S")
@@ -122,6 +124,33 @@ RecordingBackends.sox = {
   isRecording = function(self)
     return self._task ~= nil
   end,
+
+  --- Get recording display text (backend manages its own state).
+  -- @param lang (string): Current language code
+  -- @return (string): Display text for menubar
+  getRecordingDisplayText = function(self, lang)
+    if not self._startTime then
+      return string.format("🎙️ 0s (%s)", lang)
+    end
+    local elapsed = os.difftime(os.time(), self._startTime)
+    return string.format("🎙️ %ds (%s)", elapsed, lang)
+  end,
+
+  --- Start server (no-op for sox, only pythonstream has server).
+  -- @return (boolean, string|nil): always returns true for sox
+  startServer = function(self, outputDir, filenamePrefix)
+    return true, nil
+  end,
+
+  --- Stop server (no-op for sox).
+  stopServer = function(self)
+    -- Nothing to do
+  end,
+
+  --- Check if server is running (always false for sox).
+  isServerRunning = function(self)
+    return false
+  end,
 }
 
 -- === Python Stream Backend (Continuous with Silero VAD) ===
@@ -148,6 +177,9 @@ RecordingBackends.pythonstream = {
   _serverReady = false,  -- Track if server is ready
   _isRecording = false,  -- Track if currently recording
   _serverStarting = false,  -- Track if server is currently starting
+  _startTime = nil,  -- Total recording start time
+  _currentChunkStartTime = nil,  -- Current chunk start time
+  _chunkCount = 0,  -- Number of chunks received
 
   validate = function(self)
     -- Check Python exists (use which for PATH lookup)
@@ -318,6 +350,9 @@ RecordingBackends.pythonstream = {
     self._callback = callback
     self._outputDir = outputDir
     self._stopping = false
+    self._startTime = os.time()  -- Track total recording start
+    self._currentChunkStartTime = os.time()  -- Track first chunk start
+    self._chunkCount = 0  -- Reset chunk counter
 
     -- Ensure server is running
     if not self:isServerRunning() then
@@ -363,6 +398,26 @@ RecordingBackends.pythonstream = {
 
   isRecording = function(self)
     return self._isRecording
+  end,
+
+  --- Get recording display text (backend manages its own state).
+  -- @param lang (string): Current language code
+  -- @return (string): Display text for menubar
+  getRecordingDisplayText = function(self, lang)
+    if not self._startTime then
+      return string.format("🎙️ 0s (%s)", lang)
+    end
+
+    local totalElapsed = os.difftime(os.time(), self._startTime)
+
+    -- Show chunk info if we have chunks
+    if self._chunkCount > 0 and self._currentChunkStartTime then
+      local chunkElapsed = os.difftime(os.time(), self._currentChunkStartTime)
+      return string.format("🎙️ Chunk %d (%ds/%ds) (%s)",
+                          self._chunkCount + 1, chunkElapsed, totalElapsed, lang)
+    else
+      return string.format("🎙️ %ds (%s)", totalElapsed, lang)
+    end
   end,
 
   --- Check if server is running and ready.
@@ -487,6 +542,11 @@ RecordingBackends.pythonstream = {
         if event.type == "server_ready" then
           self._serverReady = true
           print("[DEBUG BACKEND] Server is ready")
+        elseif event.type == "chunk_ready" then
+          -- Update chunk state when chunk arrives
+          self._chunkCount = event.chunkNum or (self._chunkCount + 1)
+          self._currentChunkStartTime = os.time()  -- Reset chunk timer
+          print(string.format("[DEBUG BACKEND] Chunk %d ready, reset chunk timer", self._chunkCount))
         elseif event.type == "recording_stopped" then
           self._isRecording = false
           self._stopping = false
