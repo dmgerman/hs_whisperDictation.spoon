@@ -148,3 +148,64 @@ If transcription is attempted before the server is ready:
 - The transcription request fails gracefully
 - The server continues starting in the background
 - Once the server is ready, an alert shows: "Whisper server ready"
+
+* Python Stream Backend Configuration
+
+The Python stream backend uses a persistent TCP server for continuous recording with VAD-based chunking.
+
+** Basic Configuration
+
+#+begin_src lua
+wd.recordingBackend = "pythonstream"
+
+wd.pythonstreamConfig = {
+  port = 12341,                  -- TCP server port
+  host = "127.0.0.1",
+  serverStartupTimeout = 5.0,    -- Seconds to wait for server
+}
+#+end_src
+
+** Advanced Configuration
+
+Backend-specific settings (applied automatically from pythonstreamConfig):
+
+#+begin_src lua
+wd.recordingBackends.pythonstream.config = {
+  pythonCmd = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+  scriptPath = "<set automatically by spoon>",
+  host = "127.0.0.1",
+  port = 12341,
+  serverStartupTimeout = 5.0,
+  silenceThreshold = 2.0,      -- Seconds of silence to trigger chunk
+  minChunkDuration = 10.0,     -- Minimum chunk length (seconds)
+  maxChunkDuration = 120.0,    -- Maximum chunk length (seconds)
+}
+#+end_src
+
+** Server Lifecycle
+
+- *Auto-start*: Server starts asynchronously 0.5s after spoon initialization (non-blocking)
+- *Persistent*: Server stays running between recordings (VAD model loaded once)
+- *Auto-cleanup*: Zombie processes killed before starting
+- *Auto-stop*: Server shutdown gracefully when spoon stops
+- *Performance*:
+  - First recording after reload: ~2-3s (VAD model loading, one-time)
+  - All subsequent recordings: Instant (server already running)
+
+** Chunk Behavior
+
+- *Silence detection*: 2.0s of silence triggers chunk save
+- *Minimum duration*: Chunks shorter than 10s ignored (unless final)
+- *Maximum duration*: Chunks auto-split at 120s
+- *Final chunk*: Always saved regardless of duration
+- *Real-time*: Chunks transcribed as they arrive
+
+** Emacs Paste Integration
+
+When using auto-paste mode, the spoon can detect Emacs and use Ctrl-Y instead of Cmd-V:
+
+#+begin_src lua
+wd.pasteWithEmacsYank = true  -- Use Ctrl-Y in Emacs (org.gnu.Emacs)
+#+end_src
+
+This ensures transcribed text pastes correctly in Emacs without interfering with other applications.

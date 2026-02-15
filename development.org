@@ -12,11 +12,33 @@ The Spoon follows a modular design with clear separation of concerns:
 *** Logger System
 Custom structured logging with support for multiple levels (DEBUG, INFO, WARN, ERROR) and outputs (console and file). Provides unified logging throughout the Spoon.
 
-*** Recording Manager
-Manages audio capture via =sox=. The =toggleRecord()= function:
-1. On first call: Starts recording to a timestamped .wav file
-2. Starts an elapsed time timer for menubar display
-3. On second call: Stops recording and passes audio to transcription
+*** Recording Backend System
+Pluggable recording architecture supporting multiple backends:
+
+**** Sox Backend (Simple)
+- One-shot recording to single WAV file
+- Starts =sox= process on begin, terminates on stop
+- Simple but no advanced features
+
+**** Python Stream Backend (Continuous with VAD)
+- **Persistent server**: Starts once, stays running between recordings
+- **Event-driven**: TCP socket communication (newline-delimited JSON)
+- **Silero VAD**: Automatic chunk detection based on silence
+- **Real-time**: Chunks transcribed as they're recorded
+- **Auto-stop**: Detects microphone off (perfect silence)
+
+**Persistent Server Architecture:**
+1. Server starts asynchronously during spoon initialization (~2-3s for VAD model load)
+2. Server stays running, waiting for commands
+3. Recording sends =start_recording= command → server begins capture
+4. Server sends events: =recording_started=, =chunk_ready=, =recording_stopped=
+5. Recording sends =stop_recording= command → server saves final chunk, stays alive
+6. Server only exits on =shutdown= command or spoon stop
+
+**Benefits:**
+- First recording: ~300ms (no model loading)
+- Subsequent recordings: Instant (server already warm)
+- No startup latency or "first words cut off" issues
 
 *** Transcription Method System (Pluggable Architecture)
 Core innovation allowing multiple transcription backends without code duplication. Each method is self-contained with:

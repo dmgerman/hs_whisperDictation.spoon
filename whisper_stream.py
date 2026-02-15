@@ -111,6 +111,27 @@ class TCPServer:
 
         return None
 
+    def wait_for_reconnect(self, timeout=None):
+        """Wait for a new client connection after previous client disconnected.
+
+        Returns True if client connected, False on timeout.
+        """
+        if self.client_socket:
+            # Close old connection
+            try:
+                self.client_socket.close()
+            except:
+                pass
+            self.client_socket = None
+
+        self.server_socket.settimeout(timeout)
+        try:
+            self.client_socket, addr = self.server_socket.accept()
+            self.client_socket.settimeout(None)
+            return True
+        except socket.timeout:
+            return False
+
     def close(self):
         """Close server and client sockets."""
         if self.client_socket:
@@ -219,6 +240,7 @@ class ContinuousRecorder:
 
         # Control
         self.running = True
+        self.recording = False  # Whether currently recording
         self.mic_off = False  # Track if stopped due to mic being off
 
         # Load VAD model
@@ -239,6 +261,18 @@ class ContinuousRecorder:
             return model
         except Exception as e:
             raise ImportError(f"Failed to load Silero VAD model: {e}")
+
+    def _reset_recording_state(self):
+        """Reset state for a new recording session."""
+        self.chunk_num = 0
+        self.current_chunk_audio = []
+        self.current_chunk_start_time = None
+        self.all_audio = []
+        self.silence_start_time = None
+        self.perfect_silence_start_time = None
+        self.mic_warning_shown = False
+        self.startup_silence_check_done = False
+        self.mic_off = False
 
     def _detect_voice_activity(self, audio_chunk):
         """Detect if audio chunk contains voice using Silero VAD."""
@@ -357,6 +391,10 @@ class ContinuousRecorder:
         if status:
             self.tcp_server.send_event("error", error=f"Audio callback status: {status}")
 
+        # Only process audio if actively recording
+        if not self.recording:
+            return
+
         # Extract mono audio
         audio_chunk = indata[:, 0].copy()
 
@@ -379,36 +417,69 @@ class ContinuousRecorder:
             self._check_silence_boundary()
 
     def start(self):
-        """Start continuous recording."""
+        """Start persistent recording server (supports multiple recording sessions)."""
         import sounddevice as sd
-
-        self.current_chunk_start_time = time.time()
-        if not self.tcp_server.send_event("recording_started"):
-            # Client disconnected before recording started
-            self.running = False
-            return
 
         signal.signal(signal.SIGINT, lambda sig, frame: setattr(self, 'running', False))
         signal.signal(signal.SIGTERM, lambda sig, frame: setattr(self, 'running', False))
 
         try:
+            # Keep audio stream running persistently
             with sd.InputStream(callback=self.audio_callback,
                               channels=1,
                               samplerate=self.sample_rate,
                               blocksize=int(self.sample_rate * 0.5),
                               dtype=np.float32):
+
+                # Send server_ready event
+                self.tcp_server.send_event("server_ready")
+
+                # Main command loop - server stays running
                 while self.running:
                     # Check for commands from client
                     cmd = self.tcp_server.receive_command(timeout=0.1)
                     if cmd:
-                        if cmd.get('command') == 'stop':
+                        command = cmd.get('command')
+
+                        if command == 'start_recording':
+                            if not self.recording:
+                                # Start new recording session
+                                self._reset_recording_state()
+                                self.recording = True
+                                self.current_chunk_start_time = time.time()
+
+                                # Give stream a moment to stabilize
+                                time.sleep(0.3)
+
+                                self.tcp_server.send_event("recording_started")
+
+                        elif command == 'stop_recording':
+                            if self.recording:
+                                # Stop current recording session
+                                self.recording = False
+                                self._finalize_recording()
+
+                        elif command == 'shutdown':
+                            # Shutdown server
                             self.running = False
-                        elif cmd.get('command') == 'disconnect':
-                            self.running = False
+
+                        elif command == 'disconnect':
+                            # Client disconnected - stay running and wait for reconnect
+                            if self.recording:
+                                # Save current recording
+                                self.recording = False
+                                self._finalize_recording()
+                            # Wait for new client
+                            if not self.tcp_server.wait_for_reconnect(timeout=60):
+                                # No client after timeout, shutdown
+                                self.running = False
+
         except Exception as e:
             self.tcp_server.send_event("error", error=f"Recording error: {e}")
-        finally:
-            self._finalize_recording()
+            # If we were recording, save what we have
+            if self.recording:
+                self.recording = False
+                self._finalize_recording()
 
     def _save_complete_recording(self):
         """Save complete recording as single timestamped file."""

@@ -140,11 +140,14 @@ RecordingBackends.pythonstream = {
   },
 
   -- Internal state
-  _serverProcess = nil,  -- hs.task for server lifecycle only
+  _serverProcess = nil,  -- hs.task for persistent server
   _client = nil,         -- hs.socket TCP client
   _callback = nil,
   _outputDir = nil,
   _stopping = false,
+  _serverReady = false,  -- Track if server is ready
+  _isRecording = false,  -- Track if currently recording
+  _serverStarting = false,  -- Track if server is currently starting
 
   validate = function(self)
     -- Check Python exists (use which for PATH lookup)
@@ -173,6 +176,10 @@ RecordingBackends.pythonstream = {
   end,
 
   _startServer = function(self, outputDir, filenamePrefix)
+    -- Clean up any zombie processes on this port first
+    os.execute(string.format("lsof -ti:%d | xargs kill -9 2>/dev/null", self.config.port))
+    hs.timer.usleep(200000)  -- 200ms for cleanup
+
     local args = {
       self.config.scriptPath,
       "--tcp-port", tostring(self.config.port),
@@ -275,7 +282,7 @@ RecordingBackends.pythonstream = {
   end,
 
   startRecording = function(self, outputDir, filenamePrefix, lang, callback)
-    if self._client then
+    if self._isRecording then
       return false, "Already recording"
     end
 
@@ -283,101 +290,158 @@ RecordingBackends.pythonstream = {
     self._outputDir = outputDir
     self._stopping = false
 
-    -- 1. Start Python TCP server
-    local serverStarted, serverErr = self:_startServer(outputDir, filenamePrefix)
-    if not serverStarted then
-      return false, "Failed to start TCP server: " .. tostring(serverErr)
-    end
-
-    -- 2. Create and connect TCP client
-    self._client = hs.socket.new()
-    self._client:setCallback(function(data, tag)
-      self:_handleSocketData(data, tag)
-    end)
-
-    -- 3. Connect to server with retry
-    local maxRetries = 3
-    local connected = false
-    local lastErr = nil
-
-    for attempt = 1, maxRetries do
-      local ok, err = pcall(function()
-        self._client:connect(self.config.host, self.config.port)
-      end)
-
-      if ok then
-        connected = true
-        break
-      else
-        lastErr = err
-        if attempt < maxRetries then
-          -- Retry after delay
-          hs.timer.usleep(1000000)  -- 1 second
-        end
+    -- Ensure server is running
+    if not self:isServerRunning() then
+      local started, err = self:startServer(outputDir, filenamePrefix)
+      if not started then
+        return false, err
       end
     end
 
-    if not connected then
-      -- Kill server and return error
-      if self._serverProcess then
-        self._serverProcess:terminate()
-        self._serverProcess = nil
-      end
-      self._client = nil
-      return false, "Failed to connect after " .. maxRetries .. " attempts: " .. tostring(lastErr)
+    -- Send start_recording command
+    local startCmd = hs.json.encode({command = "start_recording"}) .. "\n"
+    local ok = pcall(function() self._client:write(startCmd) end)
+    if not ok then
+      return false, "Failed to send start_recording command"
     end
 
-    -- 4. Start reading from socket
-    self._client:read("\n", 1)
-
-    -- 5. Notify user that server is ready
-    hs.alert.show("🎙️ Ready to record")
-
+    self._isRecording = true
     return true, nil
   end,
 
   stopRecording = function(self)
-    if not self._client then
+    if not self._isRecording then
       return false, "Not recording"
     end
 
     self._stopping = true
-    print("[DEBUG BACKEND] Sending stop command to server")
+    print("[DEBUG BACKEND] Sending stop_recording command to server")
 
-    -- Send stop command to server (instead of disconnecting)
-    local stopCmd = hs.json.encode({command = "stop"}) .. "\n"
+    -- Send stop_recording command (server stays running)
+    local stopCmd = hs.json.encode({command = "stop_recording"}) .. "\n"
     local ok = pcall(function() self._client:write(stopCmd) end)
     if not ok then
-      print("[DEBUG BACKEND] Failed to send stop command, client may have disconnected")
+      print("[DEBUG BACKEND] Failed to send stop_recording command")
+      self._isRecording = false
+      return false, "Failed to send stop command"
     end
 
-    -- Don't wait here - let events flow through socket callback!
-    -- The server will send final chunk_ready and recording_stopped events
-    -- which will be processed by _handleSocketData callback
-
-    -- Set up cleanup timer to force cleanup after 5 seconds if server doesn't exit
-    hs.timer.doAfter(5.0, function()
-      if self._serverProcess and self._serverProcess:isRunning() then
-        print("[DEBUG BACKEND] Server still running after 5s, force cleanup")
-        if self._serverProcess then
-          pcall(function() self._serverProcess:terminate() end)
-          self._serverProcess = nil
-        end
-        if self._client then
-          pcall(function() self._client:disconnect() end)
-          self._client = nil
-        end
-        self._callback = nil
-        self._outputDir = nil
-        self._stopping = false
-      end
-    end)
+    -- Server will send final events and recording_stopped
+    -- Don't set _isRecording = false yet - wait for recording_stopped event
 
     return true, nil
   end,
 
   isRecording = function(self)
-    return self._client ~= nil
+    return self._isRecording
+  end,
+
+  --- Check if server is running and ready.
+  isServerRunning = function(self)
+    return self._serverProcess ~= nil and self._serverProcess:isRunning() and self._client ~= nil
+  end,
+
+  --- Start persistent Python stream server.
+  -- @param outputDir (string): Directory for audio files
+  -- @param filenamePrefix (string): Prefix for audio filenames
+  -- @return (boolean, string|nil): success, error message on failure
+  startServer = function(self, outputDir, filenamePrefix)
+    if self:isServerRunning() then
+      return true, nil  -- Already running
+    end
+
+    if self._serverStarting then
+      -- Server is currently starting, wait for it
+      local waited = 0
+      while self._serverStarting and waited < 10000 do
+        hs.timer.usleep(100000)  -- 100ms
+        waited = waited + 100
+      end
+      -- Check again if server is now running
+      if self:isServerRunning() then
+        return true, nil
+      end
+    end
+
+    self._serverStarting = true
+
+    -- Start server if not running
+    local serverStarted, serverErr = self:_startServer(outputDir, filenamePrefix)
+    if not serverStarted then
+      self._serverStarting = false
+      return false, "Failed to start server: " .. tostring(serverErr)
+    end
+
+    -- Connect TCP client if not connected
+    if not self._client then
+      self._client = hs.socket.new()
+      self._client:setCallback(function(data, tag)
+        self:_handleSocketData(data, tag)
+      end)
+
+      -- Connect with retry
+      local maxRetries = 3
+      local connected = false
+      for attempt = 1, maxRetries do
+        local ok, err = pcall(function()
+          self._client:connect(self.config.host, self.config.port)
+        end)
+        if ok then
+          connected = true
+          break
+        elseif attempt < maxRetries then
+          hs.timer.usleep(1000000)  -- 1 second
+        end
+      end
+
+      if not connected then
+        if self._serverProcess then
+          self._serverProcess:terminate()
+          self._serverProcess = nil
+        end
+        self._client = nil
+        return false, "Failed to connect to server"
+      end
+
+      -- Start reading from socket
+      self._client:read("\n", 1)
+
+      -- Wait briefly for socket to be ready (non-blocking)
+      -- The server_ready event will arrive via socket callback
+      hs.timer.usleep(100000)  -- 100ms for socket to establish
+    end
+
+    -- Server is listening and socket is connected
+    -- The server_ready event will arrive asynchronously via callback
+    self._serverStarting = false
+    return true, nil
+  end,
+
+  --- Stop persistent Python stream server.
+  stopServer = function(self)
+    if self._client then
+      -- Send shutdown command
+      local shutdownCmd = hs.json.encode({command = "shutdown"}) .. "\n"
+      pcall(function() self._client:write(shutdownCmd) end)
+      hs.timer.usleep(500000)  -- Give it 500ms to shutdown gracefully
+
+      pcall(function() self._client:disconnect() end)
+      self._client = nil
+    end
+
+    if self._serverProcess then
+      if self._serverProcess:isRunning() then
+        self._serverProcess:terminate()
+      end
+      self._serverProcess = nil
+    end
+
+    self._serverReady = false
+    self._isRecording = false
+    self._serverStarting = false
+    self._callback = nil
+    self._outputDir = nil
+    self._stopping = false
   end,
 
   -- Handle incoming socket data (newline-delimited JSON events)
@@ -389,6 +453,18 @@ RecordingBackends.pythonstream = {
       local ok, event = pcall(hs.json.decode, data)
       if ok and event and event.type then
         print(string.format("[DEBUG BACKEND] Event type: %s", event.type))
+
+        -- Handle server_ready event
+        if event.type == "server_ready" then
+          self._serverReady = true
+          print("[DEBUG BACKEND] Server is ready")
+        elseif event.type == "recording_stopped" then
+          self._isRecording = false
+          self._stopping = false
+          print("[DEBUG BACKEND] Recording stopped, server still running")
+        end
+
+        -- Forward all events to callback
         if self._callback then
           self._callback(event)
         end
@@ -403,6 +479,8 @@ RecordingBackends.pythonstream = {
     elseif data == nil then
       -- Connection closed by server
       print("[DEBUG BACKEND] Server connection closed")
+      self._serverReady = false
+      self._isRecording = false
       if self._callback and not self._stopping then
         self._callback({
           type = "error",

@@ -74,6 +74,7 @@ obj.retranscribeMethod = "whisperkitcli"  -- Backend used by transcribeLatestAga
 obj.retranscribeCount = 10                -- Number of recent recordings to show in chooser
 obj.monitorUserActivity = false           -- Track keyboard/mouse/app activity during recording
 obj.autoPasteDelay = 0.1                  -- Delay in seconds before auto-pasting
+obj.pasteWithEmacsYank = false            -- If true, paste with Ctrl-Y in Emacs instead of Cmd-V
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
@@ -387,6 +388,7 @@ obj.userActivityDetected = false
 obj.activityCounts = {keys = 0, clicks = 0, appSwitches = 0}
 obj.startingApp = nil
 obj.shouldPaste = false
+obj.serverStartupTimer = nil  -- Keep timer alive to prevent garbage collection
 
 -- Chunk tracking state (for continuous recording backends)
 obj.recordingStartTime = nil        -- Total recording start time
@@ -633,6 +635,22 @@ local function isSameAppFocused()
   end
 
   return currentApp:bundleID() == obj.startingApp:bundleID()
+end
+
+--- Paste text using appropriate method for current application.
+-- If pasteWithEmacsYank is enabled and current app is Emacs, uses Ctrl-Y.
+-- Otherwise uses standard Cmd-V.
+local function smartPaste()
+  if obj.pasteWithEmacsYank then
+    local focusedWindow = hs.window.focusedWindow()
+    local currentApp = focusedWindow and focusedWindow:application()
+    if currentApp and currentApp:bundleID() == "org.gnu.Emacs" then
+      hs.eventtap.keyStroke({"ctrl"}, "y")
+      return
+    end
+  end
+  -- Default paste
+  hs.eventtap.keyStroke({"cmd"}, "v")
 end
 
 local function startRecordingSession()
@@ -937,7 +955,7 @@ local function handleTranscriptionResult(success, textOrError, audioFile)
         -- No activity (or monitoring disabled) and same app - auto-paste
         obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. #text .. " chars) - pasting...", true)
         hs.timer.doAfter(obj.autoPasteDelay, function()
-          hs.eventtap.keyStroke({"cmd"}, "v")
+          smartPaste()
         end)
       end
       obj.shouldPaste = false
@@ -1153,7 +1171,7 @@ local function finalizeTranscription()
       -- Auto-paste after delay
       obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars) - pasting...", true)
       hs.timer.doAfter(obj.autoPasteDelay, function()
-        hs.eventtap.keyStroke({"cmd"}, "v")
+        smartPaste()
       end)
     end
     obj.shouldPaste = false
@@ -1316,16 +1334,20 @@ end
 -- @param event (table): Event from recording backend
 local function handleRecordingEvent(event)
   local eventType = event.type
-  if eventType == "recording_started" then
+  if eventType == "server_ready" then
+    obj.logger:debug("Recording server ready")
+  elseif eventType == "recording_started" then
     obj.logger:debug("Recording backend started")
+    hs.alert.show("🎙️ Ready to record", 1.5)
   elseif eventType == "chunk_ready" then
     handleChunkReady(event)
   elseif eventType == "recording_stopped" then
     obj.logger:info("Recording backend stopped")
 
-    -- Clean up backend connection now that recording is done
+    -- For persistent backends (pythonstream), keep connection alive
+    -- For sox, clean up as before
     local backend = obj.recordingBackends[obj.recordingBackend]
-    if backend and backend._client then
+    if backend and backend.name == "sox" and backend._client then
       pcall(function() backend._client:disconnect() end)
       backend._client = nil
       backend._serverProcess = nil
@@ -1566,6 +1588,33 @@ function obj:start()
     end
   end
 
+  -- Start persistent Python stream server asynchronously if using pythonstream backend
+  if obj.recordingBackend == "pythonstream" then
+    obj.logger:info("Starting Python stream server in background...")
+    ensureDir(obj.tempDir)
+
+    -- Start server asynchronously to avoid blocking Hammerspoon startup
+    -- Store timer to prevent garbage collection
+    obj.serverStartupTimer = hs.timer.doAfter(0.5, function()
+      obj.logger:info("[ASYNC] Server startup callback executing...")
+      local ok, err = pcall(function()
+        local backend = obj.recordingBackends.pythonstream
+        obj.logger:info("[ASYNC] Calling backend:startServer()...")
+        local started, startErr = backend:startServer(obj.tempDir, currentLang())
+        obj.logger:info("[ASYNC] startServer returned: " .. tostring(started))
+        if not started then
+          obj.logger:warn("Python stream server not started: " .. tostring(startErr) .. " (will start on first recording)")
+        else
+          obj.logger:info("Python stream server ready")
+        end
+      end)
+      if not ok then
+        obj.logger:error("Python stream server async startup failed: " .. tostring(err))
+      end
+      obj.logger:info("[ASYNC] Server startup callback complete")
+    end)
+  end
+
   resetMenuToIdle()
   obj.logger:info("WhisperDictation ready using " .. method.displayName .. " (" .. currentLang() .. ")", true)
 end
@@ -1575,6 +1624,15 @@ function obj:stop()
 
   -- Stop the whisper server if running
   obj:stopServer()
+
+  -- Stop Python stream server if running
+  if obj.recordingBackend == "pythonstream" then
+    local backend = obj.recordingBackends.pythonstream
+    if backend:isServerRunning() then
+      obj.logger:info("Stopping Python stream server...")
+      backend:stopServer()
+    end
+  end
 
   if obj.menubar then
     obj.menubar:delete()

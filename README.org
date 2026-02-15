@@ -9,6 +9,13 @@ WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that p
 
 Records audio from your microphone, transcribes it locally, and copies the text to your clipboard. A menubar indicator shows recording status and elapsed time.
 
+** Performance
+
+Using the Python stream backend with persistent server:
+- *First recording after reload*: ~2-3 seconds (one-time VAD model loading)
+- *All subsequent recordings*: Instant start (server stays warm)
+- *No startup lag*: Server initializes asynchronously in background
+
 ** Key Features
 
 - Local voice-to-text transcription (no cloud required)
@@ -84,6 +91,7 @@ wd:start()
 wd = hs.loadSpoon("hs_whisperDictation")
 wd.languages = {"en", "ja", "es", "fr"}
 wd.monitorUserActivity = true  -- Enable activity monitoring
+wd.pasteWithEmacsYank = true   -- Use Ctrl-Y in Emacs (optional)
 wd:bindHotKeys({
     toggle = {{"ctrl", "cmd"}, "d"},        -- Copy mode
     togglePaste = {{}, "F15"},              -- Auto-paste mode
@@ -206,7 +214,22 @@ end)
 #+begin_src lua
 wd.monitorUserActivity = true  -- Enable/disable monitoring
 wd.autoPasteDelay = 0.1         -- Delay before paste (seconds)
+wd.pasteWithEmacsYank = true    -- Use Ctrl-Y in Emacs instead of Cmd-V
 #+end_src
+
+** Emacs Integration
+
+By default, auto-paste uses =Cmd-V= for all applications. If you use Emacs, you can enable Emacs-specific paste behavior:
+
+#+begin_src lua
+wd.pasteWithEmacsYank = true
+#+end_src
+
+When enabled:
+- In Emacs (bundle ID =org.gnu.Emacs=): Uses =Ctrl-Y= to yank from kill ring
+- In all other applications: Uses =Cmd-V= as normal
+
+This ensures transcribed text pastes correctly in Emacs without interfering with other applications.
 
 * Configuration
 
@@ -221,6 +244,7 @@ wd.autoPasteDelay = 0.1         -- Delay before paste (seconds)
 | =showRecordingIndicator= | true                    | Show red circle while recording                         |
 | =monitorUserActivity=    | false                   | Enable activity monitoring for auto-paste               |
 | =autoPasteDelay=         | 0.1                     | Delay (seconds) before auto-paste                       |
+| =pasteWithEmacsYank=     | false                   | Use Ctrl-Y for paste in Emacs (org.gnu.Emacs)           |
 
 For detailed customization (icons, indicator styling, logging, server config), see [[file:configuration.org][configuration.org]].
 
