@@ -4,18 +4,18 @@
 
 Track completion status for each step. Update this section as work progresses.
 
-| Step | Description                                    | Status     | Completed Date |
-|------|------------------------------------------------|------------|----------------|
-| 1    | Foundation - Notifier and Directory Structure  | ⬜ Pending | -              |
-| 2    | Interface Definitions and Mock Implementations | ⬜ Pending | -              |
-| 3    | Core Manager with State Machine                | ⬜ Pending | -              |
-| 4    | SoxRecorder - Simple Recording Implementation  | ⬜ Pending | -              |
-| 5    | WhisperCLITranscriber - Simple Transcription   | ⬜ Pending | -              |
-| 6    | Integration Test - Core Subset End-to-End      | ⬜ Pending | -              |
-| 7    | Additional Recorders and Transcribers          | ⬜ Pending | -              |
-| 8    | Dual API Support in init.lua                   | ⬜ Pending | -              |
-| 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending | -              |
-| 10   | Deprecation Warnings, Full Test Suite, Cleanup | ⬜ Pending | -              |
+| Step | Description                                    | Status      | Completed Date |
+|------|------------------------------------------------|-------------|----------------|
+| 1    | Foundation - Notifier and Directory Structure  | ✅ Complete | 2026-02-15     |
+| 2    | Interface Definitions and Mock Implementations | ⬜ Pending  | -              |
+| 3    | Core Manager with State Machine                | ⬜ Pending  | -              |
+| 4    | SoxRecorder - Simple Recording Implementation  | ⬜ Pending  | -              |
+| 5    | WhisperCLITranscriber - Simple Transcription   | ⬜ Pending  | -              |
+| 6    | Integration Test - Core Subset End-to-End      | ⬜ Pending  | -              |
+| 7    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
+| 8    | Dual API Support in init.lua                   | ⬜ Pending  | -              |
+| 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending  | -              |
+| 10   | Deprecation Warnings, Full Test Suite, Cleanup | ⬜ Pending  | -              |
 
 **Status Legend:**
 - ⬜ Pending - Not started

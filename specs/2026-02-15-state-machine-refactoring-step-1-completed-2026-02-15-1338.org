@@ -1,0 +1,194 @@
+#+TITLE: Step 1 Completion Report - State Machine Refactoring
+#+DATE: 2026-02-15 13:38
+#+AUTHOR: Claude Sonnet 4.5
+
+* Summary
+
+Successfully completed Step 1 of the state machine refactoring plan:
+"Foundation - Notifier and Directory Structure"
+
+** Work Completed
+
+- Created centralized UI boundary module (Notifier)
+- Created new directory structure for v2 architecture
+- Implemented comprehensive test suite with 40 passing tests
+- All validation requirements met
+
+* Implementation Details
+
+** Directories Created
+
+New directory structure for the refactored architecture:
+
+- =recorders/= - Directory for IRecorder interface and implementations
+- =transcribers/= - Directory for ITranscriber interface and implementations
+- =core_v2/= - Directory for new Manager implementation
+- =tests/mocks/= - Directory for mock implementations for testing
+
+** Files Created
+
+*** lib/notifier.lua (135 lines)
+
+Centralized UI boundary implementing the Notifier pattern:
+
+- API: =Notifier.show(category, severity, message)=
+- 4 categories: =init=, =config=, =recording=, =transcription=
+- 4 severities: =debug= (log only), =info= (3s), =warning= (5s), =error= (10s)
+- Icon mapping:
+  - Categories: ✓ (init), ⚙️ (config), 🎙️ (recording), 📝 (transcription)
+  - Severity overrides: ⚠️ (warning), ❌ (error)
+- Strict validation with fail-fast on invalid inputs
+- Helper functions for testing (getValidCategories, getValidSeverities, etc.)
+
+*** tests/spec/unit/lib/notifier_spec.lua (315 lines)
+
+Comprehensive test suite covering:
+
+- Category validation (7 tests)
+  - Accepts all 4 valid categories
+  - Rejects invalid, nil, and empty string categories
+
+- Severity validation (7 tests)
+  - Accepts all 4 valid severities
+  - Rejects invalid, nil, and empty string severities
+
+- Message validation (3 tests)
+  - Accepts valid string messages
+  - Rejects nil and non-string messages
+
+- Alert display behavior (5 tests)
+  - Shows alerts for info/warning/error
+  - Does NOT show alert for debug (log only)
+  - Still logs debug messages
+
+- Icon mapping (7 tests)
+  - Correct category icons for each category
+  - Severity icons override category icons for warning/error
+  - Icons included in alert messages
+
+- Duration mapping (7 tests)
+  - Correct durations for each severity
+  - Durations passed correctly to hs.alert.show
+
+- Helper functions (2 tests)
+  - getValidCategories returns all 4 categories
+  - getValidSeverities returns all 4 severities
+
+- Message formatting (2 tests)
+  - Category icon + message formatting
+  - Severity icon override formatting
+
+** Test Results
+
+All 40 tests passing:
+
+#+BEGIN_EXAMPLE
+$ busted tests/spec/unit/lib/notifier_spec.lua
+ok 1 - Notifier Category validation should accept 'init' category
+ok 2 - Notifier Category validation should accept 'config' category
+ok 3 - Notifier Category validation should accept 'recording' category
+ok 4 - Notifier Category validation should accept 'transcription' category
+ok 5 - Notifier Category validation should reject invalid category
+ok 6 - Notifier Category validation should reject nil category
+ok 7 - Notifier Category validation should reject empty string category
+ok 8 - Notifier Severity validation should accept 'debug' severity
+ok 9 - Notifier Severity validation should accept 'info' severity
+ok 10 - Notifier Severity validation should accept 'warning' severity
+ok 11 - Notifier Severity validation should accept 'error' severity
+ok 12 - Notifier Severity validation should reject invalid severity
+ok 13 - Notifier Severity validation should reject nil severity
+ok 14 - Notifier Severity validation should reject empty string severity
+ok 15 - Notifier Message validation should accept valid message
+ok 16 - Notifier Message validation should reject nil message
+ok 17 - Notifier Message validation should reject non-string message
+ok 18 - Notifier Alert display behavior should show alert for 'info' severity
+ok 19 - Notifier Alert display behavior should show alert for 'warning' severity
+ok 20 - Notifier Alert display behavior should show alert for 'error' severity
+ok 21 - Notifier Alert display behavior should NOT show alert for 'debug' severity
+ok 22 - Notifier Alert display behavior should still log 'debug' messages even though no alert shown
+ok 23 - Notifier Icon mapping should use ✓ icon for 'init' category
+ok 24 - Notifier Icon mapping should use ⚙️ icon for 'config' category
+ok 25 - Notifier Icon mapping should use 🎙️ icon for 'recording' category
+ok 26 - Notifier Icon mapping should use 📝 icon for 'transcription' category
+ok 27 - Notifier Icon mapping should use ⚠️ icon for 'warning' severity (overrides category)
+ok 28 - Notifier Icon mapping should use ❌ icon for 'error' severity (overrides category)
+ok 29 - Notifier Icon mapping should include icon in alert message
+ok 30 - Notifier Duration mapping should use 0 second duration for 'debug'
+ok 31 - Notifier Duration mapping should use 3 second duration for 'info'
+ok 32 - Notifier Duration mapping should use 5 second duration for 'warning'
+ok 33 - Notifier Duration mapping should use 10 second duration for 'error'
+ok 34 - Notifier Duration mapping should pass correct duration to hs.alert.show for 'info'
+ok 35 - Notifier Duration mapping should pass correct duration to hs.alert.show for 'warning'
+ok 36 - Notifier Duration mapping should pass correct duration to hs.alert.show for 'error'
+ok 37 - Notifier Helper functions should return all valid categories
+ok 38 - Notifier Helper functions should return all valid severities
+ok 39 - Notifier Complete message formatting should format message with category icon and text
+ok 40 - Notifier Complete message formatting should format message with severity icon overriding category
+1..40
+#+END_EXAMPLE
+
+* Git Status
+
+** New Files
+
+#+BEGIN_EXAMPLE
+$ git status --short
+A  ai-docs/refactoring_summary.org
+?? lib/notifier.lua
+?? specs/2026-02-15-state-machine-refactoring.md
+?? tests/spec/unit/lib/notifier_spec.lua
+#+END_EXAMPLE
+
+** Lines Changed
+
+#+BEGIN_EXAMPLE
+$ wc -l lib/notifier.lua tests/spec/unit/lib/notifier_spec.lua
+     135 lib/notifier.lua
+     315 tests/spec/unit/lib/notifier_spec.lua
+     450 total
+#+END_EXAMPLE
+
+Total: *450 lines added* (135 implementation + 315 tests)
+
+* Architecture Notes
+
+** UI Boundary Pattern
+
+The Notifier module implements the UI Boundary pattern:
+
+- *Single responsibility*: Only module that calls =hs.alert.show()=
+- *Centralized control*: All UI feedback flows through one place
+- *Finite message types*: 4 categories × 4 severities = 16 distinct message types
+- *Fail-fast validation*: Invalid inputs throw errors immediately (programming errors)
+
+This pattern addresses the scattered =hs.alert.show()= calls throughout the old codebase
+and provides a single point of control for all user-facing notifications.
+
+** Benefits
+
+1. *Consistency*: All alerts use consistent formatting and duration
+2. *Testability*: Easy to mock and verify all UI interactions
+3. *Debuggability*: All messages logged, even debug-level ones
+4. *Maintainability*: Changes to alert behavior only need to happen in one place
+
+** Design Decisions
+
+- Severity icons (⚠️, ❌) override category icons for warning/error
+- Debug severity logs but doesn't show alerts (developer-focused)
+- Helper functions provided for testing without exposing internal data structures
+- Validation happens on every call (fail-fast, not fail-silent)
+
+* Next Steps
+
+Ready to proceed to Step 2: "Interface Definitions and Mock Implementations"
+
+This will involve:
+- Creating =recorders/i_recorder.lua= interface
+- Creating =transcribers/i_transcriber.lua= interface
+- Creating =tests/mocks/mock_recorder.lua=
+- Creating =tests/mocks/mock_transcriber.lua=
+- Writing ~55 tests for interfaces and mocks
+
+* Status
+
+✅ Step 1 COMPLETE - All deliverables met, all tests passing
