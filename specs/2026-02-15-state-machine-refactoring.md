@@ -9,7 +9,7 @@ Track completion status for each step. Update this section as work progresses.
 | 1    | Foundation - Notifier and Directory Structure  | ✅ Complete | 2026-02-15     |
 | 2    | Interface Definitions and Mock Implementations | ✅ Complete | 2026-02-15     |
 | 3    | Core Manager with State Machine                | ✅ Complete | 2026-02-15     |
-| 4    | SoxRecorder - Simple Recording Implementation  | ⬜ Pending  | -              |
+| 4    | SoxRecorder - Simple Recording Implementation  | ✅ Complete | 2026-02-15     |
 | 5    | WhisperCLITranscriber - Simple Transcription   | ⬜ Pending  | -              |
 | 6    | Integration Test - Core Subset End-to-End      | ⬜ Pending  | -              |
 | 7    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
@@ -24,6 +24,51 @@ Track completion status for each step. Update this section as work progresses.
 
 **Instructions for updating:**
 When completing a step, change status from ⬜ to ✅ and add the completion date.
+
+---
+
+## Testing References
+
+**CRITICAL**: Each step includes comprehensive testing. See `CLAUDE.md` for detailed patterns:
+
+- **Unit Testing with Mocks** - `CLAUDE.md` section "Testing Async/Callback Code with Mocks"
+  - How to test callback-based code with synchronous mocks
+  - 5 essential patterns with ❌ WRONG / ✅ CORRECT examples
+  - Handling timer and task auto-completion in tests
+  - See `tests/spec/unit/recorders/sox_recorder_spec.lua` for working example
+
+- **Live Hammerspoon Integration Tests** - `CLAUDE.md` section "Testing with Real Hammerspoon"
+  - Shell-based test framework (`tests/lib/test_framework.sh`)
+  - `hs_eval()`, `sleep`, console checking, file validation patterns
+  - Full lifecycle testing with real audio and async timing
+  - See `tests/test_sox_integration.sh` for working example
+
+**Testing Strategy by Step:**
+
+- **Steps 1-7** (Before init.lua integration):
+  - ✅ Comprehensive unit tests with mocks (40-100 tests per component)
+  - ✅ Integration tests with mocks (test component interactions)
+  - ⚠️ Live Hammerspoon tests deferred (components use relative `dofile()` paths)
+  - 📋 Manual verification with simple `hs -c` commands where needed
+
+- **Step 8+** (After init.lua integration):
+  - ✅ All unit and integration tests continue
+  - ✅ Add full shell-based live integration tests (test through spoon interface)
+  - ✅ Use test framework like old architecture (`tests/test_sox_integration.sh` pattern)
+
+**Why defer live tests?** New components use `dofile("recorders/i_recorder.lua")` which requires correct working directory. This works when loaded from init.lua, but not from standalone `hs -c` commands. See `CLAUDE.md` lessons learned.
+
+**Test Execution:**
+```bash
+# Unit tests (fast, mocked) - USE THESE for Steps 1-7
+busted tests/spec/unit/recorders/sox_recorder_spec.lua
+
+# All unit tests
+make test           # Unit + Python tests
+
+# Live integration tests - ADD IN STEP 8
+make test-live      # Live Hammerspoon integration tests
+```
 
 ---
 
@@ -138,11 +183,17 @@ mkdir -p recorders transcribers core_v2 tests/mocks
 busted tests/spec/unit/lib/notifier_spec.lua
 ```
 
-Manual test:
-```lua
-local Notifier = dofile(hs.spoons.scriptPath() .. "lib/notifier.lua")
-Notifier.show("recording", "info", "Test") -- Should show 🎙️ Test for 3s
+**Live Hammerspoon Test:**
+```bash
+# Quick visual test in Hammerspoon
+timeout 3 hs -c "
+  Notifier = dofile('/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/lib/notifier.lua')
+  Notifier.show('recording', 'info', 'Test message')
+  print('Should see: 🎙️ Test message (3s alert)')
+"
 ```
+
+**See:** `CLAUDE.md` section "Testing with Real Hammerspoon" for integration test patterns
 
 ---
 
@@ -279,22 +330,40 @@ end
 busted tests/spec/unit/core_v2/manager_spec.lua
 ```
 
-Manual test with mocks:
-```lua
-local Manager = require("core_v2.manager")
-local MockRecorder = require("tests.mocks.mock_recorder")
-local MockTranscriber = require("tests.mocks.mock_transcriber")
+**Live Hammerspoon Test with Mocks:**
+```bash
+# Test Manager with MockRecorder (3 chunks) + MockTranscriber
+timeout 5 hs -c "
+  local sp = '/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/'
+  package.path = package.path .. ';' .. sp .. '?.lua;' .. sp .. '?/init.lua'
 
-mgr = Manager.new(
-  MockRecorder.new({chunkCount = 3}),
-  MockTranscriber.new(),
-  {language = "en", tempDir = "/tmp"}
-)
-mgr:startRecording("en")
--- Wait briefly
-mgr:stopRecording()
--- Should see 3 chunks transcribed, assembled, copied to clipboard
+  Manager = dofile(sp .. 'core_v2/manager.lua')
+  MockRecorder = dofile(sp .. 'tests/mocks/mock_recorder.lua')
+  MockTranscriber = dofile(sp .. 'tests/mocks/mock_transcriber.lua')
+
+  mgr = Manager.new(
+    MockRecorder.new({chunkCount = 3, delay = 0.1}),
+    MockTranscriber.new({delay = 0.1}),
+    {language = 'en', tempDir = '/tmp'}
+  )
+
+  print('Starting recording...')
+  mgr:startRecording('en')
+
+  hs.timer.doAfter(0.5, function()
+    print('Stopping recording...')
+    mgr:stopRecording()
+
+    hs.timer.doAfter(1, function()
+      print('Final state:', mgr.state)
+      print('Pending:', mgr.pendingTranscriptions)
+      print('Clipboard:', hs.pasteboard.getContents() or 'empty')
+    end)
+  end)
+"
 ```
+
+**See:** `CLAUDE.md` sections on async callback testing and live Hammerspoon testing
 
 ---
 
@@ -399,26 +468,26 @@ end
 - Integration with Manager (via mocks)
 
 **Verification:**
+
+1. **Run unit tests** (44 tests, all should pass):
 ```bash
 busted tests/spec/unit/recorders/sox_recorder_spec.lua
 ```
 
-Test with Manager + MockTranscriber:
-```lua
-local Manager = require("core_v2.manager")
-local SoxRecorder = require("recorders.sox_recorder")
-local MockTranscriber = require("tests.mocks.mock_transcriber")
+2. **Manual verification** (optional, for visual confirmation):
+```bash
+# Check that sox exists and version
+timeout 2 hs -c "print(hs.execute('/opt/homebrew/bin/sox --version'))"
 
-mgr = Manager.new(
-  SoxRecorder.new({soxCmd = "/opt/homebrew/bin/sox", tempDir = "/tmp"}),
-  MockTranscriber.new(),
-  {language = "en", tempDir = "/tmp"}
-)
-mgr:startRecording("en")
--- Record for a few seconds
-mgr:stopRecording()
--- Should see 1 chunk transcribed, copied to clipboard
+# Verify files exist
+ls -la recorders/sox_recorder.lua tests/spec/unit/recorders/sox_recorder_spec.lua
 ```
+
+**Note:** Full shell-based live integration tests will be added in **Step 8** after init.lua integration, when components can be loaded through `spoon.hs_whisperDictation` interface (see Testing References above for rationale).
+
+**See also:**
+- Unit test file for comprehensive testing patterns: `tests/spec/unit/recorders/sox_recorder_spec.lua`
+- `CLAUDE.md` sections on async/callback testing for understanding test patterns
 
 ---
 
@@ -527,25 +596,116 @@ end
 busted tests/spec/unit/transcribers/whispercli_transcriber_spec.lua
 ```
 
-Test with Manager + SoxRecorder (end-to-end):
-```lua
-local Manager = require("core_v2.manager")
-local SoxRecorder = require("recorders.sox_recorder")
-local WhisperCLITranscriber = require("transcribers.whispercli_transcriber")
+**Live Hammerspoon Integration Test:**
 
-mgr = Manager.new(
-  SoxRecorder.new({soxCmd = "/opt/homebrew/bin/sox", tempDir = "/tmp"}),
-  WhisperCLITranscriber.new({
-    executable = "/opt/homebrew/bin/whisper-cpp",
-    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
-  }),
-  {language = "en", tempDir = "/tmp"}
-)
-mgr:startRecording("en")
--- Record something
-mgr:stopRecording()
--- Should see real transcription, copied to clipboard
+Create `tests/test_whispercli_transcriber_integration.sh`:
+
+```bash
+#!/bin/bash
+# WhisperCLITranscriber Live Integration Test
+# Tests callback-based transcriber with Manager + SoxRecorder
+set -e
+cd "$(dirname "$0")/.."
+source tests/lib/test_framework.sh
+
+test_suite "WhisperCLITranscriber Integration (New Architecture)"
+
+# Prerequisites
+test_case "whisper-cpp is available"
+assert_command_exists whisper-cpp && pass
+
+test_case "whisper model exists"
+MODEL_PATH="/usr/local/whisper/ggml-large-v3.bin"
+assert_file_exists "$MODEL_PATH" && pass
+
+test_case "Hammerspoon is running"
+assert_hs_running && pass
+
+# Load components
+test_case "can load WhisperCLITranscriber"
+hs_eval_silent "
+  local spoonPath = '/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/'
+  package.path = package.path .. ';' .. spoonPath .. '?.lua;' .. spoonPath .. '?/init.lua'
+  SoxRecorder = dofile(spoonPath .. 'recorders/sox_recorder.lua')
+  WhisperCLITranscriber = dofile(spoonPath .. 'transcribers/whispercli_transcriber.lua')
+  Manager = dofile(spoonPath .. 'core_v2/manager.lua')
+"
+LOADED=$(hs_eval "print(WhisperCLITranscriber ~= nil)")
+assert_equals "true" "$LOADED" && pass
+
+# Create manager with real transcriber
+test_case "can create Manager with WhisperCLITranscriber"
+hs_eval_silent "
+  recorder = SoxRecorder.new({soxCmd = '/opt/homebrew/bin/sox', tempDir = '/tmp/test_whisper'})
+  transcriber = WhisperCLITranscriber.new({
+    executable = '/opt/homebrew/bin/whisper-cpp',
+    modelPath = '/usr/local/whisper/ggml-large-v3.bin'
+  })
+  mgr = Manager.new(recorder, transcriber, {language = 'en', tempDir = '/tmp/test_whisper'})
+"
+CREATED=$(hs_eval "print(mgr ~= nil)")
+assert_equals "true" "$CREATED" && pass
+
+# Validation
+test_case "transcriber validates successfully"
+VALID=$(hs_eval "local ok, err = transcriber:validate(); print(tostring(ok))")
+assert_equals "true" "$VALID" && pass
+
+# Full recording + transcription cycle
+test_case "can start recording"
+hs_eval_silent "mgr:startRecording('en')"
+sleep 1
+IS_RECORDING=$(hs_eval "print(tostring(mgr.state == 'RECORDING'))")
+assert_equals "true" "$IS_RECORDING" && pass
+
+test_case "record for 3 seconds"
+sleep 3 && pass
+
+test_case "can stop recording"
+hs_eval_silent "mgr:stopRecording()"
+sleep 1
+STATE=$(hs_eval "print(mgr.state)")
+# May be TRANSCRIBING or IDLE depending on timing
+echo "  # state: $STATE"
+pass
+
+test_case "transcription completes"
+# Wait up to 30 seconds for transcription
+MAX_WAIT=30
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+  STATE=$(hs_eval "print(mgr.state)" 2>/dev/null)
+  if [ "$STATE" = "IDLE" ]; then
+    break
+  fi
+  sleep 2
+  ELAPSED=$((ELAPSED + 2))
+done
+assert_equals "IDLE" "$STATE" && pass
+
+test_case "clipboard contains real transcription"
+CLIPBOARD=$(hs_eval "print(hs.pasteboard.getContents() or '')")
+# Just verify we got something (real transcription)
+assert_not_equals "" "$CLIPBOARD" && pass
+echo "  # transcription: ${CLIPBOARD:0:50}..."
+
+# Cleanup
+rm -rf /tmp/test_whisper
+
+test_summary
+exit $?
 ```
+
+**Run:**
+```bash
+./tests/test_whispercli_transcriber_integration.sh
+```
+
+**Note:** This test requires actual audio input (speak into microphone during recording).
+
+**See also:**
+- `CLAUDE.md` section "Testing with Real Hammerspoon"
+- `tests/test_transcription_whispercli.sh` for old architecture example
 
 ---
 
@@ -603,32 +763,163 @@ end)
 busted tests/spec/integration/new_architecture_basic_spec.lua
 ```
 
-Manual test in Hammerspoon console:
-```lua
--- Load all components
-local Manager = require("core_v2.manager")
-local SoxRecorder = require("recorders.sox_recorder")
-local WhisperCLITranscriber = require("transcribers.whispercli_transcriber")
+**Live Hammerspoon Integration Test:**
 
--- Create manager
-mgr = Manager.new(
-  SoxRecorder.new({
-    soxCmd = "/opt/homebrew/bin/sox",
-    tempDir = "/tmp/whisper_dict"
-  }),
-  WhisperCLITranscriber.new({
-    executable = "/opt/homebrew/bin/whisper-cpp",
-    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
-  }),
-  {language = "en", tempDir = "/tmp/whisper_dict"}
-)
+Create `tests/test_new_architecture_e2e.sh` - Complete end-to-end test:
 
--- Test recording
-mgr:startRecording("en")  -- Should see "Recording started" alert
--- Speak for a few seconds
-mgr:stopRecording()       -- Should see "Transcribing...", "Chunk 1: ...", "Complete!"
--- Check clipboard: hs.pasteboard.getContents() should have transcription
+```bash
+#!/bin/bash
+# New Architecture End-to-End Integration Test
+# Tests complete flow: SoxRecorder + WhisperCLITranscriber + Manager
+set -e
+cd "$(dirname "$0")/.."
+source tests/lib/test_framework.sh
+
+test_suite "New Architecture - End-to-End Flow"
+
+# Prerequisites
+test_case "all dependencies available"
+assert_command_exists sox && \
+assert_command_exists whisper-cpp && \
+assert_file_exists "/usr/local/whisper/ggml-large-v3.bin" && \
+pass
+
+test_case "Hammerspoon is running"
+assert_hs_running && pass
+
+clear_console
+sleep 1
+
+# Load and initialize
+test_case "can load all new architecture components"
+hs_eval_silent "
+  local sp = '/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/'
+  package.path = package.path .. ';' .. sp .. '?.lua;' .. sp .. '?/init.lua'
+
+  -- Load new architecture components
+  Notifier = dofile(sp .. 'lib/notifier.lua')
+  SoxRecorder = dofile(sp .. 'recorders/sox_recorder.lua')
+  WhisperCLITranscriber = dofile(sp .. 'transcribers/whispercli_transcriber.lua')
+  Manager = dofile(sp .. 'core_v2/manager.lua')
+
+  -- Create instances
+  recorder = SoxRecorder.new({
+    soxCmd = '/opt/homebrew/bin/sox',
+    tempDir = '/tmp/whisper_e2e'
+  })
+
+  transcriber = WhisperCLITranscriber.new({
+    executable = '/opt/homebrew/bin/whisper-cpp',
+    modelPath = '/usr/local/whisper/ggml-large-v3.bin'
+  })
+
+  mgr = Manager.new(recorder, transcriber, {
+    language = 'en',
+    tempDir = '/tmp/whisper_e2e'
+  })
+"
+LOADED=$(hs_eval "print(mgr ~= nil and recorder ~= nil and transcriber ~= nil)")
+assert_equals "true" "$LOADED" && pass
+
+# Validation
+test_case "recorder validates"
+VALID=$(hs_eval "local ok, err = recorder:validate(); print(tostring(ok))")
+assert_equals "true" "$VALID" && pass
+
+test_case "transcriber validates"
+VALID=$(hs_eval "local ok, err = transcriber:validate(); print(tostring(ok))")
+assert_equals "true" "$VALID" && pass
+
+# State machine - initial state
+test_case "manager starts in IDLE state"
+STATE=$(hs_eval "print(mgr.state)")
+assert_equals "IDLE" "$STATE" && pass
+
+# Recording lifecycle
+test_case "can transition to RECORDING"
+hs_eval_silent "mgr:startRecording('en')"
+sleep 1
+STATE=$(hs_eval "print(mgr.state)")
+assert_equals "RECORDING" "$STATE" && pass
+
+test_case "recorder is recording"
+IS_REC=$(hs_eval "print(tostring(recorder:isRecording()))")
+assert_equals "true" "$IS_REC" && pass
+
+test_case "record audio for 4 seconds"
+sleep 4 && pass
+echo "  # Speak into microphone during this time"
+
+test_case "can stop recording"
+hs_eval_silent "mgr:stopRecording()"
+sleep 2
+IS_REC=$(hs_eval "print(tostring(recorder:isRecording()))")
+assert_equals "false" "$IS_REC" && pass
+
+# Transcription
+test_case "manager transitions through TRANSCRIBING to IDLE"
+# Wait up to 45 seconds for transcription to complete
+MAX_WAIT=45
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+  STATE=$(hs_eval "print(mgr.state)" 2>/dev/null)
+  echo "  # state: $STATE (${ELAPSED}s elapsed)"
+  if [ "$STATE" = "IDLE" ]; then
+    break
+  fi
+  sleep 3
+  ELAPSED=$((ELAPSED + 3))
+done
+assert_equals "IDLE" "$STATE" && pass
+
+# Results
+test_case "exactly 1 chunk was processed (SoxRecorder emits single chunk)"
+CHUNKS=$(hs_eval "print(#mgr.results)")
+assert_equals "1" "$CHUNKS" && pass
+
+test_case "no pending transcriptions"
+PENDING=$(hs_eval "print(mgr.pendingTranscriptions)")
+assert_equals "0" "$PENDING" && pass
+
+test_case "result copied to clipboard"
+CLIPBOARD=$(hs_eval "print(hs.pasteboard.getContents() or '')")
+assert_not_equals "" "$CLIPBOARD" && pass
+echo "  # transcription: ${CLIPBOARD:0:80}..."
+
+test_case "audio file was created"
+AUDIO=$(find /tmp/whisper_e2e -name "en-*.wav" -mmin -5 2>/dev/null | head -1)
+assert_not_equals "" "$AUDIO" && pass
+
+test_case "no errors in console"
+CONSOLE=$(get_recent_console 120)
+ERROR_COUNT=$(echo "$CONSOLE" | grep -iE "error|failed" | grep -v "no error" | wc -l | tr -d ' ')
+if [ "$ERROR_COUNT" -gt 0 ]; then
+  fail "found errors in console:"
+  echo "$CONSOLE" | grep -iE "error|failed" | grep -v "no error"
+else
+  pass
+fi
+
+# Cleanup
+rm -rf /tmp/whisper_e2e
+
+test_summary
+exit $?
 ```
+
+**Run:**
+```bash
+./tests/test_new_architecture_e2e.sh
+```
+
+**Important:** This test requires:
+- Real microphone input (speak during the 4-second recording)
+- Whisper model downloaded (~1.5GB for large-v3)
+- Transcription takes 15-45 seconds depending on hardware
+
+**See also:**
+- `CLAUDE.md` sections on async testing and live Hammerspoon tests
+- Unit tests verify logic; this verifies real-world integration
 
 ---
 

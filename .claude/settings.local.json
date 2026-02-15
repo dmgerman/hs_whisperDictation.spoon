@@ -36,7 +36,9 @@
       "Bash(pytest:*)",
       "Bash(rec:*)",
       "Bash(soxi:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(./tests/test_sox_recorder_integration.sh:*)",
+      "Bash(/tmp/testing_notes.md:*)"
     ],
     "deny": [],
     "ask": []
