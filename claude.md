@@ -41,3 +41,4 @@ When reviewing or refactoring code, do a **complete systematic pass**:
   5. Only then report success
 - 2026-02: **Hammerspoon reload hangs** - `hs -c "hs.reload()"` breaks IPC connection.
   Run in background instead: `timeout 2 hs -c "hs.reload()" &; sleep 2; timeout 2 hs -c "print('ready')"`
+- 2026-02: **Never use CAPITALIZED names** for any files.
