@@ -227,26 +227,42 @@ backend:startRecording({
 #### StreamingBackend
 Advanced streaming with Python server and Silero VAD.
 
+**Features:**
+- Real-time Voice Activity Detection (VAD) using Silero model
+- Consecutive silence detection to filter false positives during speech
+- Configurable chunk duration and silence thresholds
+- Persistent server for multiple recording sessions
+- TCP socket communication for real-time events
+
 ```lua
 local StreamingBackend = require("backends.streaming_backend")
 local backend = StreamingBackend.new(eventBus, {
   pythonExecutable = "python3",
   serverScript = "whisper_stream.py",
-  tcpPort = 12341,
-  silenceThreshold = 2.0,
-  minChunkDuration = 3.0,
-  maxChunkDuration = 600.0,
+  tcpPort = 12342,
+  silenceThreshold = 3.0,    -- Seconds of silence to trigger chunk (default: 2.0, recommended: 3.0-4.0)
+  minChunkDuration = 5.0,    -- Minimum seconds before chunk can be created (default: 3.0, recommended: 5.0)
+  maxChunkDuration = 600.0,  -- Maximum chunk duration (10 minutes)
 })
 ```
+
+**VAD Chunking Logic:**
+1. Audio callback runs every 0.5 seconds
+2. VAD analyzes last 32ms of audio using Silero model
+3. Requires 2 consecutive silence detections (1.0s) to confirm real silence
+4. After silence threshold is met AND chunk >= minChunkDuration → create chunk
+5. Total silence needed: ~4.0s (1.0s VAD confirmation + 3.0s silence threshold)
+6. Brief pauses during speech (< 4s) are ignored, preventing false chunking
 
 **Architecture:**
 ```
 Lua (StreamingBackend)
-  ↕ TCP Socket (JSON)
+  ↕ TCP Socket (JSON events)
 Python (whisper_stream.py)
-  ├─ sounddevice (audio capture)
-  ├─ Silero VAD (speech detection)
-  └─ Chunk generation
+  ├─ sounddevice (audio capture every 0.5s)
+  ├─ Silero VAD (speech detection on 32ms windows)
+  ├─ Consecutive silence detection (filters false positives)
+  └─ Chunk generation (when silence + duration thresholds met)
 ```
 
 ### Transcription Methods

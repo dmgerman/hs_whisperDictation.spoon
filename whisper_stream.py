@@ -21,6 +21,7 @@ SILENCE_AMPLITUDE_THRESHOLD = 0.01
 PERFECT_SILENCE_DURATION_AT_START = 2.0  # Detect mic off at recording start
 VAD_SPEECH_THRESHOLD = 0.25  # Lower threshold = more aggressive speech detection
 VAD_WINDOW_SECONDS = 0.5
+VAD_CONSECUTIVE_SILENCE_REQUIRED = 2  # Require 2 consecutive silence detections (1.0s) before considering it real silence
 
 
 # === Event Output ===
@@ -237,6 +238,7 @@ class ContinuousRecorder:
         self.perfect_silence_start_time = None
         self.mic_warning_shown = False
         self.startup_silence_check_done = False
+        self.consecutive_silence_count = 0  # Count consecutive silence detections
 
         # Control
         self.running = True
@@ -273,6 +275,7 @@ class ContinuousRecorder:
         self.mic_warning_shown = False
         self.startup_silence_check_done = False
         self.mic_off = False
+        self.consecutive_silence_count = 0
 
     def _detect_voice_activity(self, audio_chunk):
         """Detect if audio chunk contains voice using Silero VAD."""
@@ -373,6 +376,7 @@ class ContinuousRecorder:
                 chunk_file = self._save_chunk()
                 self._emit_chunk_ready(chunk_file, is_final=False)
                 self.silence_start_time = None
+                self.consecutive_silence_count = 0
                 return True
         return False
 
@@ -381,10 +385,17 @@ class ContinuousRecorder:
         has_voice = self._detect_voice_activity(recent_audio)
 
         if has_voice:
+            # Speech detected - reset silence tracking
             self.silence_start_time = None
+            self.consecutive_silence_count = 0
         else:
-            if self.silence_start_time is None:
-                self.silence_start_time = time.time()
+            # No speech - increment consecutive silence counter
+            self.consecutive_silence_count += 1
+
+            # Only start silence timer after consecutive detections
+            if self.consecutive_silence_count >= VAD_CONSECUTIVE_SILENCE_REQUIRED:
+                if self.silence_start_time is None:
+                    self.silence_start_time = time.time()
 
     def audio_callback(self, indata, frames, time_info, status):
         """Callback for sounddevice audio stream."""

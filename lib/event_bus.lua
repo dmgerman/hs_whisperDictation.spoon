@@ -13,6 +13,14 @@ EventBus.VALID_EVENTS = {
 
   -- Audio events
   "audio:chunk_ready",
+  "audio:chunk_error",
+
+  -- Streaming backend events
+  "streaming:server_started",
+  "streaming:server_stopped",
+  "streaming:server_ready",
+  "streaming:silence_warning",
+  "streaming:complete_file",
 
   -- Transcription events
   "transcription:started",
