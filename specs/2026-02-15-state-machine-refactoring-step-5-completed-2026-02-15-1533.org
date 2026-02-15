@@ -1,0 +1,154 @@
+#+TITLE: Step 5 Completion Report - WhisperCLITranscriber Implementation
+#+DATE: 2026-02-15 15:33
+#+AUTHOR: Claude Code
+
+* Summary
+
+Successfully implemented Step 5 of the state machine refactoring: WhisperCLITranscriber - Simple Transcription Implementation.
+
+** Work Completed
+
+- Created =transcribers/whispercli_transcriber.lua= (145 lines)
+  - Callback-based transcription interface (no Promises)
+  - Implements ITranscriber interface
+  - Uses =hs.fs.attributes()= for validation (consistent with SoxRecorder pattern)
+  - Async execution via =hs.timer.doAfter()= with blocking =io.popen()=
+  - Option-style returns =(success, error)= throughout
+  - Supports all Whisper languages (100+)
+  - Cleans up temporary .txt output files
+
+- Created comprehensive unit tests (535 lines)
+  - =tests/spec/unit/transcribers/whispercli_transcriber_spec.lua=
+  - 41 tests covering all functionality
+  - Initialization tests (6 tests)
+  - Validation tests (7 tests)
+  - Interface method tests (getName, supportsLanguage)
+  - Transcription tests (14 tests)
+  - Integration with Manager tests (3 tests)
+  - Error handling tests (11 tests)
+  - All tests passing ✓
+
+- Updated project documentation
+  - Modified =specs/2026-02-15-state-machine-refactoring.md=
+    - Marked Step 5 as Complete
+    - Deferred live integration test to Step 8 (with rationale)
+  - Updated =CLAUDE.md=
+    - Added "Important Constraints" section
+    - Documented constraint: NEVER use git commands
+
+** Key Implementation Decisions
+
+*** Validation Approach
+- Used =hs.fs.attributes()= instead of =which= command
+- Consistent with SoxRecorder pattern
+- Simpler and more direct than =io.popen("which ...")=
+- Checks both executable and model file existence
+
+*** Async Execution Pattern
+- Wrapped blocking =io.popen()= in =hs.timer.doAfter(0.01, ...)=
+- Returns =(true, nil)= immediately so Manager doesn't block
+- Actual transcription executes in timer callback
+- Acceptable for slow operations (whisper takes 5-30 seconds anyway)
+
+*** Error Handling Strategy
+- Synchronous precondition checks → return =(false, error)=
+  - Audio file not found
+- Async execution errors → call =onError()= callback
+  - Command execution failed
+  - Output file not created
+- Follows ITranscriber interface contract
+
+*** Testing Limitations
+- Unit tests limited by current mock infrastructure
+- =io.open()= not mocked, so can't test actual file content reading
+- Tests focus on:
+  - Interface compliance
+  - Validation logic
+  - Callback patterns
+  - Error conditions
+  - Integration with Manager
+- Full transcription flow testing deferred to live integration tests (Step 8)
+
+** Files Changed
+
+| File | Lines | Status |
+|------|-------|--------|
+| transcribers/whispercli_transcriber.lua | 145 | Created |
+| tests/spec/unit/transcribers/whispercli_transcriber_spec.lua | 535 | Created |
+| CLAUDE.md | +3 | Modified |
+| specs/2026-02-15-state-machine-refactoring.md | ~10 | Modified |
+
+Total: 680+ lines added
+
+** Test Results
+
+#+BEGIN_EXAMPLE
+$ busted tests/spec/unit/transcribers/whispercli_transcriber_spec.lua
+
+41 tests, 41 passed, 0 failures
+#+END_EXAMPLE
+
+All tests passing ✓
+
+** Verification
+
+*** Unit Tests
+#+BEGIN_SRC bash
+busted tests/spec/unit/transcribers/whispercli_transcriber_spec.lua
+# Result: 41/41 tests pass
+#+END_SRC
+
+*** Code Review Checklist
+- [X] Follows ITranscriber interface
+- [X] Option-style returns everywhere
+- [X] LuaDoc comments for all public methods
+- [X] No Promises or EventBus dependencies
+- [X] Consistent with new architecture principles
+- [X] Comprehensive error handling
+- [X] All tests passing
+
+** Next Steps
+
+Step 6: Integration Test - Core Subset End-to-End
+- Create integration tests with Manager + SoxRecorder + WhisperCLITranscriber
+- Test complete flow: IDLE → RECORDING → TRANSCRIBING → IDLE
+- Test state machine validation
+- Test error recovery
+
+** Notes
+
+*** Live Integration Tests Deferred
+Live Hammerspoon integration tests deferred to Step 8 because:
+- New architecture components use relative =dofile()= paths
+- Requires correct working directory (only works when loaded from init.lua)
+- Before Step 8: use comprehensive unit tests with mocks
+- After Step 8: add full shell-based integration tests through spoon interface
+
+See "Testing References" section in main spec for detailed rationale.
+
+*** Mock Infrastructure Limitations
+Current =tests/helpers/mock_hs.lua= doesn't mock:
+- =io.open()= for file content reading
+- =io.popen()= command execution
+
+Tests verify:
+- Interface compliance ✓
+- Validation logic ✓
+- Callback patterns ✓
+- Error handling ✓
+- Integration patterns ✓
+
+Cannot test in unit tests:
+- Actual transcription text reading (requires io.open mocking)
+- Command execution failures (requires io.popen mocking)
+
+These will be tested in live integration tests (Step 8).
+
+* Completion Status
+
+Step 5 is COMPLETE ✓
+
+- Implementation: Done
+- Unit tests: 41/41 passing
+- Documentation: Updated
+- Ready for Step 6

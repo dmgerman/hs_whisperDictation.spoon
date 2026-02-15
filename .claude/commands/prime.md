@@ -5,5 +5,7 @@
 git ls-files
 
 ## Read
-init.lua and README.org
+
+claude.md
+
 

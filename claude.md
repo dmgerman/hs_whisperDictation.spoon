@@ -453,6 +453,10 @@ make test-live
 - `/reload` - Reload Hammerspoon safely (see `.claude/commands/reload.md`)
 - '/use-console-for-debugging.md' - access the console output (see `.claude/commands/use-console-for-debugging.md`)
 
+## Important Constraints
+
+- **Git Command Restrictions** - Never use modifying git commands (git add, git commit, git reset, git push, etc.). The user will handle all git modifications. Read-only commands are allowed (git log, git diff, git show, git status).
+
 ## Lessons Learned
 
 - 2026-02: "Done" means systematically reviewed, not "compiles and runs"
