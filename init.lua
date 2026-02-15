@@ -45,10 +45,19 @@ obj.license = "MIT"
 
 local spoonPath = debug.getinfo(1, "S").source:sub(2):match("(.*/)")
 
+-- Fallback for when loaded via dofile() in tests
+if not spoonPath then
+  spoonPath = "./"
+end
+
 -- Add spoon path to package.path for require() calls
 local parentPath = spoonPath:match("(.*/)Spoons/.-%.spoon/") or spoonPath:match("(.*/)")
-package.path = package.path .. ";" .. spoonPath .. "?.lua;" .. spoonPath .. "?/init.lua"
-package.path = package.path .. ";" .. parentPath .. "?.lua;" .. parentPath .. "?/init.lua"
+if spoonPath and spoonPath ~= "./" then
+  package.path = package.path .. ";" .. spoonPath .. "?.lua;" .. spoonPath .. "?/init.lua"
+end
+if parentPath then
+  package.path = package.path .. ";" .. parentPath .. "?.lua;" .. parentPath .. "?/init.lua"
+end
 
 -- ============================================================================
 -- === Icons ===
@@ -692,8 +701,14 @@ local function setupEventHandlers()
   -- Handle recording errors
   obj.eventBus:on("recording:error", function(data)
     obj.logger:error("Recording error: " .. tostring(data.error), true)
-    stopRecordingSession()
-    resetMenuToIdle()
+
+    -- Only stop recording if error occurred DURING recording
+    -- Don't stop if error was from trying to start when already running
+    if data.context ~= "start" then
+      stopRecordingSession()
+      resetMenuToIdle()
+    end
+    -- For start errors, just log - don't disrupt active recording
   end)
 
   -- Handle transcription errors

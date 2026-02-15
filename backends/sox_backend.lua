@@ -16,11 +16,10 @@ function SoxBackend.new(eventBus, config)
   self.soxCmd = config.soxCmd or "/opt/homebrew/bin/sox"
   self.tempDir = config.tempDir or "/tmp/whisper_dict"
 
-  -- Recording state
+  -- Operational state only (NOT recording state)
   self.task = nil
-  self.audioFile = nil
-  self.currentLang = nil
-  self.startTime = nil
+  self._currentAudioFile = nil  -- Temporary for task completion
+  self._currentLang = nil  -- Needed for event data
 
   return self
 end
@@ -52,9 +51,9 @@ function SoxBackend:startRecording(config)
     local outputDir = config.outputDir or self.tempDir
     local filenamePrefix = config.lang or "audio"
 
-    self.audioFile = string.format("%s/%s-%s.wav", outputDir, filenamePrefix, timestamp)
-    self.currentLang = config.lang
-    self.startTime = os.time()
+    local audioFile = string.format("%s/%s-%s.wav", outputDir, filenamePrefix, timestamp)
+    self._currentAudioFile = audioFile  -- Store temporarily for task completion
+    self._currentLang = config.lang  -- Store for event data
 
     -- Create sox task: sox -q -d output.wav
     self.task = hs.task.new(
@@ -63,7 +62,7 @@ function SoxBackend:startRecording(config)
         -- Task completed (either stopped or error)
         self.task = nil
       end,
-      {"-q", "-d", self.audioFile}
+      {"-q", "-d", audioFile}
     )
 
     if not self.task then
@@ -84,8 +83,7 @@ function SoxBackend:startRecording(config)
 
     -- Emit recording started event
     self.eventBus:emit("recording:started", {
-      lang = self.currentLang,
-      startTime = self.startTime,
+      lang = self._currentLang,
     })
 
     resolve()
@@ -102,8 +100,8 @@ function SoxBackend:stopRecording()
   end
 
   return Promise.new(function(resolve, reject)
-    local audioFile = self.audioFile
-    local lang = self.currentLang
+    local audioFile = self._currentAudioFile
+    local lang = self._currentLang
 
     -- Terminate sox
     self.task:terminate()
@@ -114,9 +112,7 @@ function SoxBackend:stopRecording()
       -- Check if file was created
       local attrs = hs.fs.attributes(audioFile)
       if not attrs then
-        self.audioFile = nil
-        self.currentLang = nil
-        self.startTime = nil
+        self:_resetState()
 
         self.eventBus:emit("recording:error", {
           error = "Recording file was not created",
@@ -144,6 +140,12 @@ function SoxBackend:stopRecording()
       resolve()
     end)
   end)
+end
+
+--- Reset operational state
+function SoxBackend:_resetState()
+  self._currentAudioFile = nil
+  self._currentLang = nil
 end
 
 --- Check if currently recording

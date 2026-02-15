@@ -207,6 +207,92 @@ def convert_to_int16(audio_data):
     return audio_data
 
 
+# === File Audio Source (for testing) ===
+
+class FileAudioSource:
+    """Simulates real-time audio streaming from a WAV file for testing."""
+
+    def __init__(self, file_path, sample_rate=16000, chunk_duration=0.5):
+        """
+        Load audio file and prepare for streaming simulation.
+
+        Args:
+            file_path: Path to WAV file
+            sample_rate: Expected sample rate (will resample if needed)
+            chunk_duration: Duration of each chunk in seconds (matches sounddevice blocksize)
+        """
+        import scipy.io.wavfile
+
+        self.file_path = Path(file_path)
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"Test audio file not found: {file_path}")
+
+        # Load audio file
+        file_sr, audio_data = scipy.io.wavfile.read(str(self.file_path))
+
+        # Convert to float32 [-1, 1] range
+        audio_data = normalize_audio(audio_data)
+
+        # Handle stereo -> mono conversion
+        if len(audio_data.shape) > 1:
+            audio_data = audio_data[:, 0]  # Take first channel
+
+        # Resample if needed
+        if file_sr != sample_rate:
+            from scipy import signal
+            num_samples = int(len(audio_data) * sample_rate / file_sr)
+            audio_data = signal.resample(audio_data, num_samples)
+
+        self.audio_data = audio_data.astype(np.float32)
+        self.sample_rate = sample_rate
+        self.chunk_size = int(sample_rate * chunk_duration)
+        self.position = 0
+        self.chunk_duration = chunk_duration
+
+    def read_chunk(self):
+        """
+        Read next chunk of audio data.
+
+        Returns:
+            numpy array of shape (chunk_size, 1) or None if EOF
+        """
+        if self.position >= len(self.audio_data):
+            return None
+
+        # Extract chunk
+        end_pos = min(self.position + self.chunk_size, len(self.audio_data))
+        chunk = self.audio_data[self.position:end_pos]
+        self.position = end_pos
+
+        # Pad last chunk if needed
+        if len(chunk) < self.chunk_size:
+            chunk = np.pad(chunk, (0, self.chunk_size - len(chunk)), mode='constant')
+
+        # Return as (N, 1) shape to match sounddevice format
+        return chunk.reshape(-1, 1)
+
+    def stream_to_callback(self, callback, simulate_realtime=True):
+        """
+        Stream audio chunks to callback function, simulating real-time behavior.
+
+        Args:
+            callback: Function(indata, frames, time_info, status) matching sounddevice callback
+            simulate_realtime: If True, sleep between chunks to simulate real-time streaming
+        """
+        while True:
+            chunk = self.read_chunk()
+            if chunk is None:
+                break
+
+            # Call the callback with sounddevice-compatible signature
+            # (indata, frames, time, status)
+            callback(chunk, len(chunk), None, None)
+
+            # Simulate real-time streaming delay
+            if simulate_realtime:
+                time.sleep(self.chunk_duration)
+
+
 # === Continuous Recorder ===
 
 class ContinuousRecorder:
@@ -216,7 +302,8 @@ class ContinuousRecorder:
                  silence_threshold=5.0,
                  min_chunk_duration=10.0,
                  max_chunk_duration=120.0,
-                 sample_rate=16000):
+                 sample_rate=16000,
+                 audio_source=None):
         self.tcp_server = tcp_server
         self.output_dir = Path(output_dir)
         self.filename_prefix = filename_prefix
@@ -224,6 +311,7 @@ class ContinuousRecorder:
         self.min_chunk_duration = min_chunk_duration
         self.max_chunk_duration = max_chunk_duration
         self.sample_rate = sample_rate
+        self.audio_source = audio_source  # Optional FileAudioSource for testing
 
         # Chunk state
         self.chunk_num = 0
@@ -297,6 +385,9 @@ class ContinuousRecorder:
         self.chunk_num += 1
         chunk_file = self.output_dir / f"{self.filename_prefix}_chunk_{self.chunk_num:03d}.wav"
 
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         audio_data = np.concatenate(self.current_chunk_audio)
         audio_data = convert_to_int16(audio_data)
 
@@ -331,7 +422,12 @@ class ContinuousRecorder:
             self.tcp_server.send_event("silence_warning",
                                       message="Microphone off - stopping recording")
             self.mic_off = True  # Flag that mic is off
-            self.running = False  # Stop recording
+
+            # Stop recording and notify client
+            if self.recording:
+                self._finalize_recording()
+
+            self.running = False  # Stop server loop
             self.startup_silence_check_done = True  # Don't check again
 
     def _emit_chunk_ready(self, chunk_file, is_final=False):
@@ -429,10 +525,23 @@ class ContinuousRecorder:
 
     def start(self):
         """Start persistent recording server (supports multiple recording sessions)."""
-        import sounddevice as sd
+        # Set up signal handlers only if in main thread
+        try:
+            signal.signal(signal.SIGINT, lambda sig, frame: setattr(self, 'running', False))
+            signal.signal(signal.SIGTERM, lambda sig, frame: setattr(self, 'running', False))
+        except ValueError:
+            # Not in main thread (e.g., during testing) - skip signal handlers
+            pass
 
-        signal.signal(signal.SIGINT, lambda sig, frame: setattr(self, 'running', False))
-        signal.signal(signal.SIGTERM, lambda sig, frame: setattr(self, 'running', False))
+        # Use file source for testing or sounddevice for real recording
+        if self.audio_source:
+            self._start_with_file_source()
+        else:
+            self._start_with_microphone()
+
+    def _start_with_microphone(self):
+        """Start recording from microphone using sounddevice."""
+        import sounddevice as sd
 
         try:
             # Keep audio stream running persistently
@@ -446,51 +555,112 @@ class ContinuousRecorder:
                 self.tcp_server.send_event("server_ready")
 
                 # Main command loop - server stays running
-                while self.running:
-                    # Check for commands from client
-                    cmd = self.tcp_server.receive_command(timeout=0.1)
-                    if cmd:
-                        command = cmd.get('command')
-
-                        if command == 'start_recording':
-                            if not self.recording:
-                                # Start new recording session
-                                self._reset_recording_state()
-                                self.recording = True
-                                self.current_chunk_start_time = time.time()
-
-                                # Give stream a moment to stabilize
-                                time.sleep(0.3)
-
-                                self.tcp_server.send_event("recording_started")
-
-                        elif command == 'stop_recording':
-                            if self.recording:
-                                # Stop current recording session
-                                self.recording = False
-                                self._finalize_recording()
-
-                        elif command == 'shutdown':
-                            # Shutdown server
-                            self.running = False
-
-                        elif command == 'disconnect':
-                            # Client disconnected - stay running and wait for reconnect
-                            if self.recording:
-                                # Save current recording
-                                self.recording = False
-                                self._finalize_recording()
-                            # Wait for new client
-                            if not self.tcp_server.wait_for_reconnect(timeout=60):
-                                # No client after timeout, shutdown
-                                self.running = False
+                self._run_command_loop()
 
         except Exception as e:
-            self.tcp_server.send_event("error", error=f"Recording error: {e}")
+            # Microphone error - send event but stay running for retry
+            error_msg = f"Microphone error: {e}"
+            self.tcp_server.send_event("error", error=error_msg)
+            self.tcp_server.send_event("recording_stopped")  # Signal recording stopped
+
             # If we were recording, save what we have
             if self.recording:
-                self.recording = False
                 self._finalize_recording()
+
+            # Send server_ready so client knows we're still alive
+            self.tcp_server.send_event("server_ready")
+
+            # Keep server running - wait for user to fix mic and retry
+            self._run_command_loop()
+
+    def _start_with_file_source(self):
+        """Start recording from file source (for testing)."""
+        import threading
+
+        try:
+            # Send server_ready event
+            self.tcp_server.send_event("server_ready")
+
+            # Start file streaming in background thread
+            def stream_audio():
+                while self.running:
+                    # Only stream if recording
+                    if self.recording:
+                        chunk = self.audio_source.read_chunk()
+                        if chunk is None:
+                            # EOF - finalize and stop
+                            if self.recording:
+                                self._finalize_recording()
+                            self.running = False
+                            break
+                        # Call audio callback
+                        self.audio_callback(chunk, len(chunk), None, None)
+                        # Simulate real-time streaming delay
+                        time.sleep(self.audio_source.chunk_duration)
+                    else:
+                        # Not recording, just sleep a bit
+                        time.sleep(0.01)
+
+            audio_thread = threading.Thread(target=stream_audio, daemon=True)
+            audio_thread.start()
+
+            # Main command loop
+            self._run_command_loop()
+
+            # Wait for audio thread to finish
+            audio_thread.join(timeout=2.0)
+
+        except Exception as e:
+            # File streaming error - send event but stay running
+            error_msg = f"File streaming error: {e}"
+            self.tcp_server.send_event("error", error=error_msg)
+            self.tcp_server.send_event("recording_stopped")
+
+            if self.recording:
+                self._finalize_recording()
+
+            # Keep server running
+            self.tcp_server.send_event("server_ready")
+            self._run_command_loop()
+
+    def _run_command_loop(self):
+        """Main command processing loop (shared by microphone and file modes)."""
+        while self.running:
+            # Check for commands from client
+            cmd = self.tcp_server.receive_command(timeout=0.1)
+            if cmd:
+                command = cmd.get('command')
+
+                if command == 'start_recording':
+                    if not self.recording:
+                        # Start new recording session
+                        self._reset_recording_state()
+                        self.recording = True
+                        self.current_chunk_start_time = time.time()
+
+                        # Give stream a moment to stabilize
+                        time.sleep(0.3)
+
+                        self.tcp_server.send_event("recording_started")
+
+                elif command == 'stop_recording':
+                    if self.recording:
+                        # Stop current recording session
+                        self._finalize_recording()
+
+                elif command == 'shutdown':
+                    # Shutdown server
+                    self.running = False
+
+                elif command == 'disconnect':
+                    # Client disconnected - stay running and wait for reconnect
+                    if self.recording:
+                        # Save current recording
+                        self._finalize_recording()
+                    # Wait for new client
+                    if not self.tcp_server.wait_for_reconnect(timeout=60):
+                        # No client after timeout, shutdown
+                        self.running = False
 
     def _save_complete_recording(self):
         """Save complete recording as single timestamped file."""
@@ -500,6 +670,9 @@ class ContinuousRecorder:
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         complete_file = self.output_dir / f"{self.filename_prefix}-{timestamp}.wav"
+
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         audio_data = np.concatenate(self.all_audio)
         audio_data = convert_to_int16(audio_data)
@@ -511,6 +684,11 @@ class ContinuousRecorder:
 
     def _finalize_recording(self):
         """Save final chunk and emit recording_stopped event."""
+        # Reset recording state FIRST (single source of truth)
+        if not self.recording:
+            return  # Already finalized
+        self.recording = False
+
         # Save complete recording as single file (for auditing/re-processing)
         complete_file = self._save_complete_recording()
         if complete_file:
@@ -547,6 +725,7 @@ def main():
                        help="Minimum chunk duration (seconds)")
     parser.add_argument("--max-chunk-duration", type=float, default=600.0,
                        help="Maximum chunk duration (seconds)")
+    parser.add_argument("--test-file", help="WAV file to use instead of microphone (for testing)")
 
     args = parser.parse_args()
 
@@ -565,6 +744,18 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create file audio source if test file provided
+    audio_source = None
+    if args.test_file:
+        try:
+            audio_source = FileAudioSource(args.test_file)
+            print(json.dumps({"status": "test_mode", "file": args.test_file}),
+                  file=sys.stderr, flush=True)
+        except Exception as e:
+            print(json.dumps({"status": "error", "error": f"Failed to load test file: {e}"}),
+                  file=sys.stderr, flush=True)
+            sys.exit(1)
 
     tcp_server = None
     try:
@@ -586,7 +777,8 @@ def main():
             args.filename_prefix,
             args.silence_threshold,
             args.min_chunk_duration,
-            args.max_chunk_duration
+            args.max_chunk_duration,
+            audio_source=audio_source
         )
         recorder.start()
     except Exception as e:

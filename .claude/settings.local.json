@@ -24,7 +24,19 @@
       "Bash(./tests/test_pythonstream_real.sh:*)",
       "Bash(/tmp/test_task.py:*)",
       "Bash(killall:*)",
-      "Bash(open:*)"
+      "Bash(open:*)",
+      "Bash(make)",
+      "Bash(make test-unit:*)",
+      "Bash(make:*)",
+      "Bash(tests/test_pythonstream_integration.sh)",
+      "Bash(bash -x tests/test_pythonstream_integration.sh)",
+      "Bash(tests/verify_environment.sh)",
+      "Bash(find:*)",
+      "Bash(tests/python/__init__.py:*)",
+      "Bash(pytest:*)",
+      "Bash(rec:*)",
+      "Bash(soxi:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

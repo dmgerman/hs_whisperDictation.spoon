@@ -141,7 +141,7 @@ describe("StreamingBackend", function()
     it("handles recording_stopped events from server", function()
       local stopEmitted = false
 
-      eventBus:on("streaming:server_stopped", function()
+      eventBus:on("recording:stopped", function()
         stopEmitted = true
       end)
 
@@ -154,7 +154,7 @@ describe("StreamingBackend", function()
       local errorEmitted = false
       local errorMsg = nil
 
-      eventBus:on("audio:chunk_error", function(data)
+      eventBus:on("recording:error", function(data)
         errorEmitted = true
         errorMsg = data.error
       end)

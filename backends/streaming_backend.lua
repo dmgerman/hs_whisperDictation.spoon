@@ -2,6 +2,8 @@
 -- Real implementation using hs.task and hs.socket directly
 -- Emits EventBus events and returns Promises
 
+local ErrorHandler = require("lib.error_handler")
+
 local StreamingBackend = {}
 StreamingBackend.__index = StreamingBackend
 
@@ -32,14 +34,12 @@ function StreamingBackend.new(eventBus, config)
   }
 
   -- Internal state
+  -- Operational state only (NOT recording state)
   self.serverProcess = nil
   self.tcpSocket = nil
-  self.currentLang = nil
-  self._isRecording = false
   self._serverStarting = false
-  self._startTime = nil
-  self._currentChunkStartTime = nil
   self._chunkCount = 0
+  self._currentLang = nil  -- Needed for event routing, not recording state
 
   return self
 end
@@ -165,20 +165,14 @@ function StreamingBackend:_startServer(outputDir, filenamePrefix)
   local pythonPath = self:_resolvePythonPath()
 
   -- Start server subprocess
+  local self_ref = self
   self.serverProcess = _G.hs.task.new(
     pythonPath,
     function(exitCode, stdOut, stdErr)
       -- Exit callback
       print(string.format("[StreamingBackend] Server exited: exitCode=%d", exitCode))
       if exitCode ~= 0 then
-        local errorMsg = string.format("❌ Python server crashed (exit %d)", exitCode)
-        if stdErr and #stdErr > 0 then
-          print("[StreamingBackend] Server stderr: " .. stdErr)
-          errorMsg = errorMsg .. ":\n" .. stdErr:sub(1, 200)
-        end
-        if _G.hs and _G.hs.alert then
-          _G.hs.alert.show(errorMsg, 15.0)
-        end
+        ErrorHandler.handleServerCrash(exitCode, stdErr, self_ref.eventBus)
       end
     end,
     args
@@ -204,10 +198,7 @@ function StreamingBackend:_startServer(outputDir, filenamePrefix)
         if ok and errorData and errorData.error then
           serverError = errorData.error
           if serverError:match("Address already in use") or serverError:match("Errno 48") then
-            print(string.format("[StreamingBackend] ERROR: Port %d in use", self_ref.config.tcpPort))
-            if _G.hs and _G.hs.alert then
-              _G.hs.alert.show(string.format("⚠️ Port %d in use!", self_ref.config.tcpPort), 5)
-            end
+            ErrorHandler.showWarning(string.format("Port %d in use!", self_ref.config.tcpPort), 5)
           end
         else
           serverError = "Unknown server error"
@@ -290,11 +281,7 @@ function StreamingBackend:_connectTCPSocket()
     -- Start reading
     self.tcpSocket:read("\n", 1)
   else
-    local msg = "❌ Failed to connect to server on port " .. self.config.tcpPort
-    print("[StreamingBackend] " .. msg)
-    if _G.hs and _G.hs.alert then
-      _G.hs.alert.show(msg, 15.0)
-    end
+    ErrorHandler.showError("Failed to connect to server on port " .. self.config.tcpPort, self.eventBus, 15.0)
   end
 end
 
@@ -308,11 +295,11 @@ function StreamingBackend:_handleSocketData(data, tag)
   -- Parse JSON event
   local ok, event = pcall(_G.hs.json.decode, data)
   if not ok or not event or not event.type then
-    print("[StreamingBackend] Failed to parse event: " .. tostring(data))
+    ErrorHandler.handleInvalidMessage(data, self.eventBus)
     return
   end
 
-  self:_handleServerEvent(event, self.currentLang)
+  self:_handleServerEvent(event, self._currentLang)
 
   -- Continue reading
   if self.tcpSocket and not self.tcpSocket.test_mode then
@@ -349,7 +336,7 @@ function StreamingBackend:_handleServerEvent(event, lang)
     })
 
   elseif eventType == "recording_stopped" then
-    self.eventBus:emit("streaming:server_stopped", {})
+    self.eventBus:emit("recording:stopped", {})
     print("[StreamingBackend] Recording stopped")
     self._isRecording = false
 
@@ -360,13 +347,16 @@ function StreamingBackend:_handleServerEvent(event, lang)
 
   elseif eventType == "error" then
     print("[StreamingBackend] Server error: " .. tostring(event.error))
-    self.eventBus:emit("audio:chunk_error", { error = event.error })
+    self.eventBus:emit("recording:error", { error = event.error })
 
   elseif eventType == "silence_warning" then
-    print("[StreamingBackend] Silence warning: " .. tostring(event.message))
-    self.eventBus:emit("streaming:silence_warning", {
-      message = event.message,
-    })
+    local message = event.message or "Microphone appears to be off"
+    -- ErrorHandler.showError already emits recording:error
+    ErrorHandler.showError(message, self.eventBus, 10.0)
+    -- Note: Python server should send recording_stopped after this
+  else
+    -- Unknown event type - report it
+    ErrorHandler.handleUnknownEvent(eventType, self.eventBus)
   end
 end
 
@@ -380,11 +370,7 @@ function StreamingBackend:_sendCommand(command)
       return true  -- Test mode
     end
 
-    local msg = "❌ Cannot send command: no TCP connection"
-    print("[StreamingBackend] " .. msg)
-    if _G.hs and _G.hs.alert then
-      _G.hs.alert.show(msg, 10.0)
-    end
+    ErrorHandler.showError("Cannot send command: no TCP connection", self.eventBus)
     return false
   end
 
@@ -396,21 +382,13 @@ function StreamingBackend:_sendCommand(command)
   -- Encode and send
   local ok, json = pcall(_G.hs.json.encode, command)
   if not ok then
-    local msg = "❌ Failed to encode command as JSON"
-    print("[StreamingBackend] " .. msg)
-    if _G.hs and _G.hs.alert then
-      _G.hs.alert.show(msg, 10.0)
-    end
+    ErrorHandler.showError("Failed to encode command as JSON", self.eventBus)
     return false
   end
 
   local sent = self.tcpSocket:write(json .. "\n")
   if not sent then
-    local msg = "❌ Failed to send command to server"
-    print("[StreamingBackend] " .. msg)
-    if _G.hs and _G.hs.alert then
-      _G.hs.alert.show(msg, 10.0)
-    end
+    ErrorHandler.showError("Failed to send command to server", self.eventBus)
     return false
   end
 
@@ -475,26 +453,21 @@ end
 function StreamingBackend:startRecording(config)
   local Promise = require("lib.promise")
 
-  if self._isRecording then
-    return Promise.reject("Already recording")
+  if self.serverProcess then
+    return Promise.reject("Server already running")
   end
 
-  self.currentLang = config.lang
-  self._startTime = os.time()
-  self._currentChunkStartTime = os.time()
-  self._chunkCount = 0
+  local lang = config.lang
+  self._currentLang = lang  -- Store for event routing
+  self._chunkCount = 0  -- Reset operational counter
 
-  print("[StreamingBackend] startRecording called with lang=" .. config.lang)
+  print("[StreamingBackend] startRecording called with lang=" .. lang)
 
   return Promise.new(function(resolve, reject)
     -- Ensure server is running
-    local started, err = self:_ensureServerRunning(config.outputDir or "/tmp", config.lang)
+    local started, err = self:_ensureServerRunning(config.outputDir or "/tmp", lang)
     if not started then
-      local msg = "❌ Server startup failed: " .. (err or "Unknown error")
-      print("[StreamingBackend] " .. msg)
-      if _G.hs and _G.hs.alert then
-        _G.hs.alert.show(msg, 15.0)
-      end
+      ErrorHandler.showError("Server startup failed: " .. (err or "Unknown error"), self.eventBus, 15.0)
       reject(err or "Failed to start server")
       return
     end
@@ -502,17 +475,13 @@ function StreamingBackend:startRecording(config)
     -- Send start_recording command
     local success = self:_sendCommand({command = "start_recording"})
     if not success then
-      local msg = "❌ Failed to send start command"
-      print("[StreamingBackend] " .. msg)
-      if _G.hs and _G.hs.alert then
-        _G.hs.alert.show(msg, 10.0)
-      end
+      ErrorHandler.showError("Failed to send start command", self.eventBus)
       reject("Failed to send start_recording command")
       return
     end
 
-    self._isRecording = true
-    self.eventBus:emit("recording:started", { lang = config.lang })
+    -- Emit event with lang from config (not stored state)
+    self.eventBus:emit("recording:started", { lang = lang })
     print("[StreamingBackend] ✓ Recording started")
     resolve()
   end)
@@ -531,11 +500,7 @@ function StreamingBackend:stopRecording()
     -- Send stop_recording command
     local success = self:_sendCommand({command = "stop_recording"})
     if not success then
-      local msg = "❌ Failed to send stop command"
-      print("[StreamingBackend] " .. msg)
-      if _G.hs and _G.hs.alert then
-        _G.hs.alert.show(msg, 10.0)
-      end
+      ErrorHandler.showError("Failed to send stop command", self.eventBus)
       reject("Failed to send stop command")
       return
     end
@@ -546,10 +511,12 @@ function StreamingBackend:stopRecording()
   end)
 end
 
---- Check if currently recording
--- @return (boolean): true if recording
+--- Check if backend is operational (server running)
+-- Note: This checks operational state, NOT recording state
+-- RecordingManager is the source of truth for recording state
+-- @return (boolean): true if server is running
 function StreamingBackend:isRecording()
-  return self._isRecording
+  return self.serverProcess ~= nil
 end
 
 --- Get display text for menubar
@@ -602,8 +569,7 @@ function StreamingBackend:shutdown()
     self.serverProcess = nil
   end
 
-  self._isRecording = false
-  self.currentLang = nil
+  self._currentLang = nil  -- Clear operational state
 
   print("[StreamingBackend] ✓ Server shutdown complete")
   return true

@@ -19,7 +19,6 @@ EventBus.VALID_EVENTS = {
   "streaming:server_started",
   "streaming:server_stopped",
   "streaming:server_ready",
-  "streaming:silence_warning",
   "streaming:complete_file",
 
   -- Transcription events
@@ -48,32 +47,24 @@ end
 
 --- Validate event name
 -- @param eventName (string): Event name to validate
--- @return (boolean): true if valid
+-- @throws error if event name is invalid in strict mode
 function EventBus:_validateEventName(eventName)
   if not self.strict then
-    return true
+    return
   end
 
   if not self.knownEvents[eventName] then
     local msg = string.format(
-      "⚠️  INVALID EVENT NAME: '%s' is not in EventBus.VALID_EVENTS!\n" ..
-      "This is likely a bug. Valid events: %s",
+      "INVALID EVENT NAME: '%s' is not in EventBus.VALID_EVENTS!\n" ..
+      "This is a bug. Valid events: %s",
       eventName,
       table.concat(EventBus.VALID_EVENTS, ", ")
     )
 
-    if _G.hs and _G.hs.alert then
-      _G.hs.alert.show("❌ Invalid event: " .. eventName, 10.0)
-    end
-
-    if _G.print then
-      print(msg)
-    end
-
-    return false
+    -- FAIL HARD - this is a programming error that must be fixed
+    -- Alerts should be handled by ErrorHandler at a higher level
+    error(msg, 2)
   end
-
-  return true
 end
 
 --- Register a listener for an event
@@ -132,7 +123,14 @@ function EventBus:emit(eventName, data)
   -- Validate event name
   self:_validateEventName(eventName)
 
-  if not self.listeners[eventName] then
+  if not self.listeners[eventName] or #self.listeners[eventName] == 0 then
+    -- Warn about events with no listeners (possible dead code)
+    if self.strict and _G.print then
+      print(string.format(
+        "[EventBus] ⚠️  Event '%s' emitted but no listeners registered (possible dead code)",
+        eventName
+      ))
+    end
     return  -- No listeners registered for this event
   end
 

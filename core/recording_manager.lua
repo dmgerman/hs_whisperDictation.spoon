@@ -28,11 +28,21 @@ function RecordingManager:startRecording(lang)
 
   -- CRITICAL: Validate parameters
   if not lang or lang == "" then
-    return Promise.reject("Language parameter is required and cannot be empty")
+    local err = "Language parameter is required and cannot be empty"
+    self.eventBus:emit("recording:error", {
+      error = err,
+      context = "start"
+    })
+    return Promise.reject(err)
   end
 
   if self.state ~= "idle" then
-    return Promise.reject("Already recording")
+    local err = "Already recording"
+    self.eventBus:emit("recording:error", {
+      error = err,
+      context = "start"
+    })
+    return Promise.reject(err)
   end
 
   self.state = "recording"
@@ -54,9 +64,7 @@ function RecordingManager:startRecording(lang)
     end)
     :catch(function(err)
       -- Error handler - cleanup and emit event
-      self.state = "idle"
-      self.currentLang = nil
-      self.startTime = nil
+      self:_resetState()
       self.eventBus:emit("recording:error", {
         error = err,
         context = "start"
@@ -72,7 +80,12 @@ function RecordingManager:stopRecording()
   local Promise = require("lib.promise")
 
   if self.state ~= "recording" then
-    return Promise.reject("Not recording")
+    local err = "Not recording"
+    self.eventBus:emit("recording:error", {
+      error = err,
+      context = "stop"
+    })
+    return Promise.reject(err)
   end
 
   self.state = "stopping"
@@ -81,9 +94,7 @@ function RecordingManager:stopRecording()
     :next(function()
       -- Success handler
       local duration = self.startTime and (os.time() - self.startTime) or 0
-      self.state = "idle"
-      self.currentLang = nil
-      self.startTime = nil
+      self:_resetState()
 
       self.eventBus:emit("recording:stopped", {
         duration = duration,
@@ -92,9 +103,7 @@ function RecordingManager:stopRecording()
     end)
     :catch(function(err)
       -- Error handler - cleanup and emit event
-      self.state = "idle"
-      self.currentLang = nil
-      self.startTime = nil
+      self:_resetState()
       self.eventBus:emit("recording:error", {
         error = err,
         context = "stop"
@@ -102,6 +111,13 @@ function RecordingManager:stopRecording()
       -- Return rejected promise to propagate error
       return Promise.reject(err)
     end)
+end
+
+--- Reset state to idle (single source of truth)
+function RecordingManager:_resetState()
+  self.state = "idle"
+  self.currentLang = nil
+  self.startTime = nil
 end
 
 --- Check if currently recording

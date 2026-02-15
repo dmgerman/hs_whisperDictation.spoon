@@ -178,6 +178,26 @@ MockHS.fs = {
     return true
   end,
 
+  dir = function(path)
+    -- Return an iterator over files in directory
+    -- For tests, return empty iterator
+    local files = {}
+    for filepath, _ in pairs(state.fs_files) do
+      if filepath:match("^" .. path .. "/[^/]+$") then
+        local filename = filepath:match("[^/]+$")
+        table.insert(files, filename)
+      end
+    end
+
+    local index = 0
+    local function iterator()
+      index = index + 1
+      return files[index]
+    end
+
+    return iterator, nil
+  end,
+
   _registerFile = function(filepath, attrs)
     state.fs_files[filepath] = attrs or { mode = "file", size = 0 }
   end,
@@ -288,13 +308,43 @@ MockHS.screen = {
 --- hs.menubar - Menubar items
 MockHS.menubar = {
   new = function()
-    return {
-      setTitle = function() return {} end,
-      setTooltip = function() return {} end,
-      setMenu = function() return {} end,
-      setIcon = function() return {} end,
-      delete = function() return {} end,
+    local menubar = {
+      _title = "",
+      _tooltip = "",
+      _callback = nil,
     }
+
+    function menubar:setTitle(title)
+      self._title = title
+      return self
+    end
+
+    function menubar:setTooltip(tooltip)
+      self._tooltip = tooltip
+      return self
+    end
+
+    function menubar:setMenu(menu)
+      self._menu = menu
+      return self
+    end
+
+    function menubar:setIcon(icon)
+      self._icon = icon
+      return self
+    end
+
+    function menubar:setClickCallback(callback)
+      self._callback = callback
+      return self
+    end
+
+    function menubar:delete()
+      self._deleted = true
+      return self
+    end
+
+    return menubar
   end,
 }
 
