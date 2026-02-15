@@ -90,6 +90,13 @@ obj.serverConfig = {
   curlCmd = "/usr/bin/curl",
 }
 
+-- === Python Stream Backend Configuration ===
+obj.pythonstreamConfig = {
+  port = 12341,  -- TCP server port (user-configurable)
+  host = "127.0.0.1",
+  serverStartupTimeout = 5.0,  -- Seconds to wait for server ready
+}
+
 -- === Transcription Methods ===
 -- Method-agnostic transcription system. Users select which method to use.
 -- Each method implements: validate(), transcribe(audioFile, lang, callback)
@@ -1084,9 +1091,30 @@ end
 --- Finalize transcription - concatenate all chunks and copy to clipboard.
 local function finalizeTranscription()
   print(string.format("[DEBUG] finalizeTranscription: chunkCount=%d", obj.chunkCount))
+
+  -- Check if recording was aborted (no chunks processed)
+  if obj.chunkCount == 0 then
+    obj.logger:info("❌ Transcription aborted (no audio recorded)", true)
+    resetMenuToIdle()
+    return
+  end
+
   local fullText = concatenateChunks()
   local charCount = #fullText
   print(string.format("[DEBUG] Concatenated text length: %d", charCount))
+
+  -- Save transcription to .txt file (matching complete WAV file)
+  if obj.completeRecordingFile then
+    local txtFile = obj.completeRecordingFile:gsub("%.wav$", ".txt")
+    local f, err = io.open(txtFile, "w")
+    if f then
+      f:write(fullText)
+      f:close()
+      print(string.format("[DEBUG] Transcription saved to: %s", txtFile))
+    else
+      obj.logger:warn("Failed to save transcription file: " .. tostring(err))
+    end
+  end
 
   local ok, err = pcall(hs.pasteboard.setContents, fullText)
   if not ok then
@@ -1288,27 +1316,38 @@ end
 -- @param event (table): Event from recording backend
 local function handleRecordingEvent(event)
   local eventType = event.type
-  print(string.format("[DEBUG LUA] handleRecordingEvent: type=%s", tostring(eventType)))
-
   if eventType == "recording_started" then
-    print("[DEBUG LUA] Recording started event")
     obj.logger:debug("Recording backend started")
   elseif eventType == "chunk_ready" then
-    print("[DEBUG LUA] Chunk ready event, calling handleChunkReady")
     handleChunkReady(event)
   elseif eventType == "recording_stopped" then
-    print("[DEBUG LUA] Recording stopped event")
     obj.logger:info("Recording backend stopped")
+
+    -- Clean up backend connection now that recording is done
+    local backend = obj.recordingBackends[obj.recordingBackend]
+    if backend and backend._client then
+      pcall(function() backend._client:disconnect() end)
+      backend._client = nil
+      backend._serverProcess = nil
+      backend._callback = nil
+      backend._outputDir = nil
+      backend._stopping = false
+    end
+
+    -- Stop recording session UI (menubar, timer, indicator)
+    stopRecordingSession()
+
+    -- Trigger finalization check now that recording has stopped
+    checkIfTranscriptionComplete()
+  elseif eventType == "complete_file" then
+    obj.completeRecordingFile = event.file_path
   elseif eventType == "silence_warning" then
-    print("[DEBUG LUA] Silence warning event")
     handleSilenceWarning(event)
   elseif eventType == "error" then
-    print(string.format("[DEBUG LUA] Error event: %s", event.error or "unknown"))
     handleRecordingError(event)
   elseif eventType == "debug" then
-    print(string.format("[DEBUG PYTHON] %s", event.message or ""))
+    -- Ignore debug events
   else
-    print(string.format("[DEBUG LUA] Unknown event type: %s", tostring(eventType)))
     obj.logger:warn("Unknown event type from recording backend: " .. tostring(eventType))
   end
 end
@@ -1336,6 +1375,7 @@ local function resetChunkState()
   obj.completedChunks = {}
   obj.allChunksText = {}
   obj.recordingBackendFallback = false
+  obj.completeRecordingFile = nil  -- Path to complete WAV file
 end
 
 local function tryStartRecording(backend)
@@ -1369,9 +1409,25 @@ function obj:beginTranscribe(callbackOrPaste)
   local success, err = tryStartRecording(backend)
 
   if not success then
-    self.logger:error("Failed to start recording: " .. tostring(err), true)
-    resetMenuToIdle()
-    return self
+    self.logger:error("Failed to start " .. backend.displayName .. ": " .. tostring(err))
+
+    -- Auto-fallback to sox if pythonstream fails
+    if self.recordingBackend == "pythonstream" then
+      self.logger:warn("Falling back to Sox backend")
+      hs.alert.show("Python stream failed, using simple recording mode")
+      self.recordingBackend = "sox"
+      self.recordingBackendFallback = true
+      backend = self.recordingBackends.sox
+
+      success, err = tryStartRecording(backend)
+    end
+
+    if not success then
+      -- Even sox failed - critical error
+      self.logger:error("All backends failed: " .. tostring(err), true)
+      resetMenuToIdle()
+      return self
+    end
   end
 
   self.logger:info(self.icons.recording .. " Recording started with " .. backend.displayName .. " (" .. currentLang() .. ")", true)
@@ -1404,6 +1460,10 @@ function obj:endTranscribe()
 
   -- Note: Chunks will be transcribed via handleRecordingEvent callbacks
   -- Final concatenation happens in checkIfTranscriptionComplete()
+
+  -- Note: With 2-way TCP communication, server sends all events before exiting
+  -- recording_stopped event handler will trigger checkIfTranscriptionComplete()
+  -- No need to scan for missed chunks anymore!
 
   return self
 end
@@ -1443,6 +1503,13 @@ function obj:start()
 
   -- Set up Python stream backend script path
   obj.recordingBackends.pythonstream.config.scriptPath = spoonPath .. "whisper_stream.py"
+
+  -- Apply pythonstream config if this backend is selected
+  if obj.recordingBackend == "pythonstream" then
+    obj.recordingBackends.pythonstream.config.port = obj.pythonstreamConfig.port
+    obj.recordingBackends.pythonstream.config.host = obj.pythonstreamConfig.host
+    obj.recordingBackends.pythonstream.config.serverStartupTimeout = obj.pythonstreamConfig.serverStartupTimeout
+  end
 
   -- Validate recording backend
   local backend = obj.recordingBackends[obj.recordingBackend]

@@ -1,0 +1,1129 @@
+#+TITLE: Whisper Stream - TCP-based Continuous Audio Recording
+#+AUTHOR: WhisperDictation Development
+#+DATE: 2026-02-14
+
+* Overview
+
+** What is whisper_stream.py?
+
+=whisper_stream.py= is a Python-based continuous audio recording server that uses Silero VAD (Voice Activity Detection) to intelligently chunk audio in real-time. Unlike simple recording tools, it:
+
+- Records continuously from the microphone
+- Detects silence boundaries using AI-powered VAD
+- Creates chunks automatically when detecting pauses
+- Sends real-time events over TCP sockets
+- Accepts commands for clean shutdown
+- Saves both individual chunks and complete recordings
+
+** Why TCP Sockets?
+
+We use TCP sockets instead of subprocess pipes (stdin/stdout) because:
+
+1. *No buffering issues* - Events arrive in real-time, not delayed until process exit
+2. *2-way communication* - Client can send commands to server (clean shutdown)
+3. *Event loop friendly* - Non-blocking callbacks work with async event loops
+4. *Language agnostic* - Any language with socket support can use it
+5. *Reliable delivery* - TCP guarantees message order and delivery
+
+** Use Cases
+
+*** Standalone Transcription Tool
+Run from command line to record and chunk audio for later transcription:
+#+begin_src bash
+python3 whisper_stream.py \
+  --tcp-port 12341 \
+  --output-dir ./recordings \
+  --filename-prefix session \
+  --silence-threshold 2.0
+#+end_src
+
+*** Integration with Other Applications
+Build a client in any language to:
+- Control recording via commands
+- Receive real-time chunk notifications
+- Process audio as it's being recorded
+- Monitor recording state
+
+*** Custom Transcription Pipelines
+Use as a front-end for transcription systems:
+- Receive chunks in real-time
+- Send each chunk to transcription API
+- Display results as user speaks
+- Save complete recording for auditing
+
+* Quick Start
+
+** Installation
+
+Requirements:
+#+begin_src bash
+pip install sounddevice scipy torch onnxruntime
+#+end_src
+
+** Running the Server
+
+#+begin_src bash
+python3 whisper_stream.py \
+  --tcp-port 12341 \
+  --output-dir /tmp/recordings \
+  --filename-prefix test \
+  --silence-threshold 2.0 \
+  --min-chunk-duration 10.0 \
+  --max-chunk-duration 120.0
+#+end_src
+
+The server will:
+1. Start TCP server on port 12341
+2. Print: ={"status": "listening", "port": 12341}= to stderr
+3. Wait for a client to connect
+4. Start recording when client connects
+
+** Minimal Client Example (Python)
+
+#+begin_src python
+import socket
+import json
+import sys
+
+# Connect to server
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(('127.0.0.1', 12341))
+
+print("Connected! Recording started...", file=sys.stderr)
+
+# Receive events
+buffer = ""
+while True:
+    data = client.recv(1024).decode('utf-8')
+    if not data:
+        break
+
+    buffer += data
+    while '\n' in buffer:
+        line, buffer = buffer.split('\n', 1)
+        event = json.loads(line)
+
+        if event['type'] == 'chunk_ready':
+            print(f"Chunk {event['chunk_num']}: {event['audio_file']}")
+        elif event['type'] == 'recording_stopped':
+            print("Recording finished!")
+            break
+
+# Send stop command
+stop_cmd = json.dumps({"command": "stop"}) + "\n"
+client.send(stop_cmd.encode('utf-8'))
+
+# Wait for final events, then close
+import time
+time.sleep(1)
+client.close()
+#+end_src
+
+* Protocol Specification
+
+** Message Format
+
+All messages are *newline-delimited JSON* (one JSON object per line).
+
+*** From Server to Client (Events)
+#+begin_example
+{"type": "event_name", "param1": "value1", ...}\n
+#+end_example
+
+*** From Client to Server (Commands)
+#+begin_example
+{"command": "command_name", "param1": "value1", ...}\n
+#+end_example
+
+** Event Types
+
+*** recording_started
+Sent when recording begins (after client connects).
+
+#+begin_src json
+{"type": "recording_started"}
+#+end_src
+
+*** chunk_ready
+Sent when a new audio chunk is saved to disk.
+
+#+begin_src json
+{
+  "type": "chunk_ready",
+  "chunk_num": 1,
+  "audio_file": "/tmp/recordings/test_chunk_001.wav",
+  "is_final": false
+}
+#+end_src
+
+*Parameters:*
+- =chunk_num= (int): Sequential chunk number (starts at 1)
+- =audio_file= (string): Absolute path to WAV file
+- =is_final= (boolean): True for last chunk when recording stops
+
+*** complete_file
+Sent after recording stops, with path to complete recording file.
+
+#+begin_src json
+{
+  "type": "complete_file",
+  "file_path": "/tmp/recordings/test-20260214-183520.wav"
+}
+#+end_src
+
+*Parameters:*
+- =file_path= (string): Absolute path to complete WAV file (timestamped)
+
+*** silence_warning
+Sent when microphone is detected as off (perfect silence for 3+ seconds).
+
+#+begin_src json
+{
+  "type": "silence_warning",
+  "message": "Microphone off - stopping recording"
+}
+#+end_src
+
+*Parameters:*
+- =message= (string): Human-readable warning message
+
+*** recording_stopped
+Sent when recording ends (either by command or mic detection).
+
+#+begin_src json
+{"type": "recording_stopped"}
+#+end_src
+
+*** error
+Sent when an error occurs during recording.
+
+#+begin_src json
+{
+  "type": "error",
+  "error": "Error message here"
+}
+#+end_src
+
+*Parameters:*
+- =error= (string): Error description
+
+** Command Types
+
+*** stop
+Request clean shutdown of recording.
+
+#+begin_src json
+{"command": "stop"}
+#+end_src
+
+Server will:
+1. Stop recording loop
+2. Save final chunk (if any audio buffered)
+3. Send =complete_file= event
+4. Send =chunk_ready= for final chunk (if exists)
+5. Send =recording_stopped= event
+6. Exit gracefully
+
+** Configuration Parameters
+
+Command-line arguments:
+
+| Argument              | Type  | Default | Description                              |
+|-----------------------+-------+---------+------------------------------------------|
+| =--tcp-port=          | int   | 12341   | TCP server port                          |
+| =--output-dir=        | path  | *required* | Directory for audio files             |
+| =--filename-prefix=   | string| *required* | Prefix for chunk filenames            |
+| =--silence-threshold= | float | 5.0     | Seconds of silence to trigger new chunk  |
+| =--min-chunk-duration=| float | 10.0    | Minimum chunk length (seconds)           |
+| =--max-chunk-duration=| float | 120.0   | Maximum chunk length (seconds)           |
+
+* Communication Flows
+
+** Startup Sequence
+
+#+begin_example
+Client                           Server
+  |                                 |
+  |                                 | Start TCP server
+  |                                 | Print {"status": "listening", ...} to stderr
+  |                                 | wait_for_client() [blocking, 10s timeout]
+  |                                 |
+  |---- TCP connect --------------->|
+  |                                 |
+  |<--- recording_started ----------|
+  |                                 | Start audio capture
+  |                                 | Check mic (3 second test)
+  |                                 |   If perfect silence:
+  |<--- silence_warning ------------|     -> Send warning
+  |<--- recording_stopped ----------|     -> Stop
+  |                                 |   Else:
+  |                                 |     -> Continue recording
+#+end_example
+
+** Recording Flow (Normal)
+
+#+begin_example
+Client                           Server
+  |                                 |
+  |                                 | [Audio callback every 0.5s]
+  |                                 | Buffer audio...
+  |                                 | Check VAD for voice activity
+  |                                 |
+  |                                 | [After 2s silence detected]
+  |                                 | Save chunk to disk
+  |<--- chunk_ready ----------------|
+  |                                 |
+  | Process chunk (transcribe)      |
+  |                                 | Continue recording...
+  |                                 | [More audio buffered]
+  |                                 |
+  |                                 | [Max duration 120s reached]
+  |                                 | Save chunk to disk
+  |<--- chunk_ready ----------------|
+  |                                 |
+  | Process chunk                   |
+  |                                 | Continue recording...
+#+end_example
+
+** Shutdown Flow (Clean)
+
+#+begin_example
+Client                           Server
+  |                                 |
+  |---- {"command": "stop"} ------->|
+  |                                 |
+  |                                 | Set running = False
+  |                                 | Exit recording loop
+  |                                 |
+  |                                 | Save complete recording
+  |<--- complete_file --------------|
+  |                                 |
+  |                                 | Save final chunk (if any)
+  |<--- chunk_ready ----------------|  (is_final=true)
+  |                                 |
+  |<--- recording_stopped ----------|
+  |                                 |
+  |                                 | Close socket
+  |                                 | Exit process (code 0)
+  |                                 |
+  | [Client disconnects]            |
+#+end_example
+
+** Error Flow (Mic Off at Startup)
+
+#+begin_example
+Client                           Server
+  |                                 |
+  |<--- recording_started ----------|
+  |                                 |
+  |                                 | [Check mic for 3 seconds]
+  |                                 | Detect perfect silence
+  |                                 |
+  |<--- silence_warning ------------|
+  |                                 |
+  |                                 | Set mic_off = True
+  |                                 | Set running = False
+  |                                 |
+  |                                 | Save complete file (silence)
+  |<--- complete_file --------------|
+  |                                 |
+  |                                 | Skip chunk save (mic was off)
+  |<--- recording_stopped ----------|
+  |                                 |
+  |                                 | Exit
+#+end_example
+
+* Implementation Guide
+
+** Server-Side Implementation (Python)
+
+The server follows this structure:
+
+*** 1. TCP Server Setup
+#+begin_src python
+class TCPServer:
+    def __init__(self, port):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(('127.0.0.1', port))
+        self.server_socket.listen(1)
+
+    def wait_for_client(self, timeout=10):
+        self.server_socket.settimeout(timeout)
+        self.client_socket, addr = self.server_socket.accept()
+        self.client_socket.settimeout(None)
+
+    def send_event(self, event_type, **kwargs):
+        event = {"type": event_type, **kwargs}
+        message = json.dumps(event) + "\n"
+        self.client_socket.sendall(message.encode('utf-8'))
+        return True  # False if disconnected
+#+end_src
+
+*** 2. Recording Loop
+#+begin_src python
+import sounddevice as sd
+
+def audio_callback(indata, frames, time_info, status):
+    # Accumulate audio
+    self.current_chunk_audio.append(indata[:, 0].copy())
+
+    # Check VAD periodically
+    if len(self.current_chunk_audio) >= threshold:
+        has_voice = detect_voice_activity(recent_audio)
+        if not has_voice and silence_duration >= 2.0:
+            save_chunk()
+            send_event("chunk_ready", ...)
+
+with sd.InputStream(callback=audio_callback, ...):
+    while self.running:
+        # Check for commands
+        cmd = receive_command(timeout=0.1)
+        if cmd and cmd['command'] == 'stop':
+            self.running = False
+#+end_src
+
+*** 3. Command Processing
+#+begin_src python
+def receive_command(self, timeout=0.1):
+    self.client_socket.settimeout(timeout)
+    try:
+        data = self.client_socket.recv(1024).decode('utf-8')
+        if not data:
+            return {'command': 'disconnect'}
+
+        for line in data.split('\n'):
+            if line.strip():
+                return json.loads(line)
+    except socket.timeout:
+        return None
+#+end_src
+
+** Client-Side Implementation (Generic)
+
+*** 1. Connection Setup
+#+begin_src python
+# Connect to server
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect(('127.0.0.1', port))
+
+# Set up non-blocking receive (or use select/poll)
+sock.setblocking(False)
+#+end_src
+
+*** 2. Event Processing Loop
+#+begin_src python
+buffer = ""
+
+while True:
+    try:
+        data = sock.recv(1024).decode('utf-8')
+        if not data:
+            break  # Server disconnected
+
+        buffer += data
+
+        # Process complete lines
+        while '\n' in buffer:
+            line, buffer = buffer.split('\n', 1)
+            event = json.loads(line)
+            handle_event(event)
+
+    except BlockingIOError:
+        # No data available
+        time.sleep(0.1)
+#+end_src
+
+*** 3. Sending Commands
+#+begin_src python
+def send_command(sock, command, **params):
+    cmd = {"command": command, **params}
+    message = json.dumps(cmd) + "\n"
+    sock.send(message.encode('utf-8'))
+
+# Usage
+send_command(sock, "stop")
+#+end_src
+
+*** 4. Event Handling
+#+begin_src python
+def handle_event(event):
+    event_type = event['type']
+
+    if event_type == 'recording_started':
+        print("Recording started")
+
+    elif event_type == 'chunk_ready':
+        chunk_num = event['chunk_num']
+        audio_file = event['audio_file']
+        is_final = event['is_final']
+
+        # Process chunk (transcribe, etc.)
+        process_audio(audio_file)
+
+    elif event_type == 'complete_file':
+        # Archive complete recording
+        save_to_archive(event['file_path'])
+
+    elif event_type == 'recording_stopped':
+        print("Recording finished")
+        return False  # Exit loop
+
+    elif event_type == 'error':
+        print(f"Error: {event['error']}")
+
+    return True
+#+end_src
+
+** Error Handling
+
+*** Connection Errors
+#+begin_src python
+try:
+    sock.connect(('127.0.0.1', port))
+except ConnectionRefusedError:
+    # Server not running - start it first
+    print("Error: Server not listening on port", port)
+except socket.timeout:
+    # Server too slow to respond
+    print("Error: Connection timeout")
+#+end_src
+
+*** Event Parsing Errors
+#+begin_src python
+try:
+    event = json.loads(line)
+except json.JSONDecodeError:
+    print(f"Warning: Invalid JSON: {line}")
+    continue  # Skip malformed event
+#+end_src
+
+*** Unexpected Disconnect
+#+begin_src python
+data = sock.recv(1024)
+if not data:
+    # Server closed connection
+    if not expected_shutdown:
+        print("Warning: Server disconnected unexpectedly")
+        # Save any partial data
+        # Clean up resources
+#+end_src
+
+* API Reference
+
+** Events Reference
+
+*** recording_started
+| Field | Type   | Description                    |
+|-------+--------+--------------------------------|
+| type  | string | Always "recording_started"     |
+
+*When sent:* After client connects and recording begins
+
+*Client action:* Start UI updates, prepare to receive chunks
+
+*** chunk_ready
+| Field      | Type    | Description                           |
+|------------+---------+---------------------------------------|
+| type       | string  | Always "chunk_ready"                  |
+| chunk_num  | integer | Sequential chunk number (1, 2, 3...) |
+| audio_file | string  | Absolute path to WAV file             |
+| is_final   | boolean | True if this is the last chunk        |
+
+*When sent:*
+- After VAD detects silence threshold (2 seconds default)
+- After max chunk duration reached (120 seconds default)
+- When recording stops (final chunk)
+
+*Client action:* Process/transcribe the audio file
+
+*** complete_file
+| Field     | Type   | Description                              |
+|-----------+--------+------------------------------------------|
+| type      | string | Always "complete_file"                   |
+| file_path | string | Absolute path to complete WAV recording  |
+
+*When sent:* During finalization, before =recording_stopped=
+
+*Client action:* Save path for archival, re-processing, or transcription
+
+*** silence_warning
+| Field   | Type   | Description                          |
+|---------+--------+--------------------------------------|
+| type    | string | Always "silence_warning"             |
+| message | string | Human-readable warning message       |
+
+*When sent:* When perfect silence detected for 3 seconds at startup
+
+*Client action:* Display warning to user, prepare for immediate shutdown
+
+*** recording_stopped
+| Field | Type   | Description                    |
+|-------+--------+--------------------------------|
+| type  | string | Always "recording_stopped"     |
+
+*When sent:*
+- After processing =stop= command
+- After detecting mic is off
+- Before server exits
+
+*Client action:* Finalize processing, clean up UI, disconnect
+
+*** error
+| Field | Type   | Description                      |
+|-------+--------+----------------------------------|
+| type  | string | Always "error"                   |
+| error | string | Error description                |
+
+*When sent:* When recoverable error occurs during recording
+
+*Client action:* Log error, display to user, optionally retry
+
+** Commands Reference
+
+*** stop
+| Field   | Type   | Description      |
+|---------+--------+------------------|
+| command | string | Always "stop"    |
+
+*Purpose:* Request clean shutdown
+
+*Server response:*
+1. Stops recording loop
+2. Saves complete recording file
+3. Saves final chunk (if any)
+4. Sends events (=complete_file=, =chunk_ready=, =recording_stopped=)
+5. Exits gracefully
+
+** Configuration Reference
+
+*** --tcp-port
+*Type:* Integer
+*Default:* 12341
+*Description:* TCP port for server to listen on
+
+*Considerations:*
+- Must be available (not in use)
+- Ports < 1024 require root
+- Firewall may block certain ports
+
+*** --output-dir
+*Type:* Path
+*Required:* Yes
+*Description:* Directory to save audio files
+
+*Behavior:*
+- Created if doesn't exist
+- Must be writable
+- Chunks saved as ={prefix}_chunk_{num:03d}.wav=
+- Complete file saved as ={prefix}-{timestamp}.wav=
+
+*** --filename-prefix
+*Type:* String
+*Required:* Yes
+*Description:* Prefix for all generated filenames
+
+*Example:*
+- Prefix: =session=
+- Chunks: =session_chunk_001.wav=, =session_chunk_002.wav=
+- Complete: =session-20260214-183520.wav=
+
+*** --silence-threshold
+*Type:* Float (seconds)
+*Default:* 5.0
+*Description:* Duration of silence needed to trigger new chunk
+
+*Tuning:*
+- Lower (1.0-2.0): More chunks, faster response, may split mid-sentence
+- Higher (5.0-10.0): Fewer chunks, waits for long pauses
+
+*** --min-chunk-duration
+*Type:* Float (seconds)
+*Default:* 10.0
+*Description:* Minimum chunk length to save (during VAD splits)
+
+*Note:* Final chunk is always saved regardless of duration
+
+*** --max-chunk-duration
+*Type:* Float (seconds)
+*Default:* 120.0
+*Description:* Maximum chunk length before forced split
+
+*Purpose:* Prevent single chunk from becoming too large (memory, processing time)
+
+* Troubleshooting
+
+** Port Already in Use
+
+*Symptom:*
+#+begin_example
+{"status": "error", "error": "Address already in use"}
+#+end_example
+
+*Solutions:*
+1. Check for existing process:
+   #+begin_src bash
+   lsof -i :12341
+   #+end_src
+
+2. Kill existing process:
+   #+begin_src bash
+   kill <PID>
+   #+end_src
+
+3. Use different port:
+   #+begin_src bash
+   python3 whisper_stream.py --tcp-port 12342 ...
+   #+end_src
+
+** Connection Timeout
+
+*Symptom:* Client can't connect to server
+
+*Solutions:*
+1. Verify server is running:
+   #+begin_src bash
+   ps aux | grep whisper_stream.py
+   #+end_src
+
+2. Check server is listening:
+   #+begin_src bash
+   lsof -i :12341
+   #+end_src
+
+3. Check firewall rules:
+   #+begin_src bash
+   # macOS
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+   #+end_src
+
+** Microphone Not Detected
+
+*Symptom:* =silence_warning= event immediately after start
+
+*Solutions:*
+1. Check microphone permissions (macOS):
+   #+begin_example
+   System Settings → Privacy & Security → Microphone
+   #+end_example
+
+2. List available audio devices:
+   #+begin_src python
+   import sounddevice as sd
+   print(sd.query_devices())
+   #+end_src
+
+3. Test microphone:
+   #+begin_src bash
+   # Record 5 seconds
+   sox -d test.wav trim 0 5
+   # Playback
+   sox test.wav -d
+   #+end_src
+
+** No Events Received
+
+*Symptom:* Client connects but receives no events
+
+*Possible causes:*
+1. *Not reading from socket* - Make sure client is actively reading
+2. *Buffering* - Events stuck in buffer, need newline delimiter
+3. *Blocking reads* - Use non-blocking or timeout reads
+
+*Debug:*
+#+begin_src python
+# Add debug output
+data = sock.recv(1024)
+print(f"Received {len(data)} bytes: {data}")
+#+end_src
+
+** Chunks Not Being Created
+
+*Symptom:* Recording runs but no =chunk_ready= events
+
+*Possible causes:*
+1. *No silence detected* - VAD not detecting pauses
+2. *Below min_chunk_duration* - Audio too short to save
+3. *Continuous speech* - No pauses in audio
+
+*Solutions:*
+1. Lower silence threshold:
+   #+begin_src bash
+   --silence-threshold 1.0
+   #+end_src
+
+2. Lower minimum duration:
+   #+begin_src bash
+   --min-chunk-duration 5.0
+   #+end_src
+
+3. Wait for max duration (120s) to force chunk
+
+** Server Exits Immediately
+
+*Symptom:* Server starts then exits with code 0
+
+*Possible causes:*
+1. *No client connection* - Timeout after 10 seconds
+2. *Client disconnected immediately*
+3. *Microphone off* - Detected at startup, clean exit
+
+*Debug:*
+Check stderr output for clues:
+#+begin_src bash
+python3 whisper_stream.py ... 2>error.log
+cat error.log
+#+end_src
+
+* Advanced Topics
+
+** Event Loop Considerations
+
+The server uses a *polling loop* to check for commands while recording:
+
+#+begin_src python
+while self.running:
+    cmd = receive_command(timeout=0.1)  # Non-blocking, 100ms timeout
+    if cmd:
+        handle_command(cmd)
+#+end_src
+
+*Important:* The 0.1 second timeout means:
+- Commands processed within 100ms
+- Recording loop stays responsive
+- Audio callbacks continue uninterrupted
+
+For clients using event loops (asyncio, select, etc.):
+- Use non-blocking socket reads
+- Integrate with your event loop's select/poll mechanism
+- Don't block the event loop waiting for events
+
+** Buffering and Real-Time Delivery
+
+The protocol uses *newline-delimited JSON* to avoid buffering issues:
+
+*** Why Newline Delimiters?
+1. TCP is a *stream protocol* (no message boundaries)
+2. Without delimiters, receiver can't tell where one message ends
+3. Newline is simple, universal, works with line-buffered I/O
+
+*** Preventing Buffering
+Server side:
+#+begin_src python
+message = json.dumps(event) + "\n"  # Add newline
+sock.sendall(message.encode('utf-8'))  # Send immediately
+#+end_src
+
+Client side:
+#+begin_src python
+# Accumulate in buffer
+buffer += sock.recv(1024).decode('utf-8')
+
+# Process complete lines only
+while '\n' in buffer:
+    line, buffer = buffer.split('\n', 1)
+    event = json.loads(line)
+#+end_src
+
+** State Management
+
+Both server and client must track state:
+
+*** Server States
+#+begin_example
+STARTING → WAITING_FOR_CLIENT → RECORDING → FINALIZING → STOPPED
+#+end_example
+
+*** Client States
+#+begin_example
+DISCONNECTED → CONNECTED → RECORDING → PROCESSING → STOPPED
+#+end_example
+
+*** State Transitions
+| Server State        | Event Sent          | Client Action               |
+|---------------------+---------------------+-----------------------------|
+| WAITING_FOR_CLIENT  | (none)              | Connect                     |
+| RECORDING           | recording_started   | Update UI, prepare pipeline |
+| RECORDING           | chunk_ready         | Process chunk               |
+| FINALIZING          | complete_file       | Save complete file path     |
+| FINALIZING          | chunk_ready (final) | Process final chunk         |
+| STOPPED             | recording_stopped   | Finalize, clean up          |
+
+** Handling Partial Reads
+
+TCP may deliver data in chunks smaller than one complete message:
+
+#+begin_src python
+# WRONG - assumes complete message in one read
+data = sock.recv(1024)
+event = json.loads(data)  # May fail if message split!
+
+# CORRECT - accumulate until newline
+buffer = ""
+while True:
+    chunk = sock.recv(1024).decode('utf-8')
+    buffer += chunk
+
+    while '\n' in buffer:
+        line, buffer = buffer.split('\n', 1)
+        event = json.loads(line)  # Now safe!
+        handle_event(event)
+#+end_src
+
+** Clean Shutdown Protocol
+
+The *stop command* enables clean shutdown:
+
+*** Why Not Just Disconnect?
+If client just closes socket:
+- Server detects disconnect
+- Exits immediately
+- Final chunk may not be saved
+- Complete file may not be saved
+- Events may be lost
+
+*** Proper Shutdown Sequence
+1. Client sends ={"command": "stop"}=
+2. Client *keeps socket open*
+3. Server processes final audio
+4. Server sends events
+5. Server closes socket
+6. Client detects close, exits
+
+*** Implementation
+#+begin_src python
+# Send stop command
+send_command(sock, "stop")
+
+# Keep receiving events
+while True:
+    event = receive_event(sock)
+    if not event:
+        break  # Server closed socket
+
+    if event['type'] == 'recording_stopped':
+        # Continue reading for any final events
+        continue
+
+# Now safe to close
+sock.close()
+#+end_src
+
+** Performance Considerations
+
+*** Audio Buffer Size
+Default: 0.5 seconds (8000 samples at 16kHz)
+
+Larger buffer:
+- Fewer callbacks (less CPU)
+- Higher latency (slower chunk detection)
+
+Smaller buffer:
+- More callbacks (more CPU)
+- Lower latency (faster chunk detection)
+
+*** VAD Frequency
+VAD checked every 512 samples (required by Silero)
+
+Affects:
+- Silence detection accuracy
+- CPU usage
+- Chunk boundary precision
+
+*** Network Throughput
+Events are small (~100 bytes each)
+
+Typical bandwidth:
+- chunk_ready: ~10 events/minute = ~1 KB/minute
+- Total: Negligible (< 1 KB/minute)
+
+Audio files are saved to disk, not sent over socket.
+
+* Examples
+
+** Complete Client Example (Python)
+
+#+begin_src python
+#!/usr/bin/env python3
+"""
+Complete client example for whisper_stream.py
+"""
+import socket
+import json
+import sys
+import signal
+
+class WhisperStreamClient:
+    def __init__(self, host='127.0.0.1', port=12341):
+        self.host = host
+        self.port = port
+        self.sock = None
+        self.buffer = ""
+        self.running = True
+
+        # Handle Ctrl+C gracefully
+        signal.signal(signal.SIGINT, self.handle_interrupt)
+
+    def handle_interrupt(self, signum, frame):
+        """Handle Ctrl+C - send stop command"""
+        print("\nStopping recording...", file=sys.stderr)
+        self.stop()
+
+    def connect(self):
+        """Connect to server"""
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.host, self.port))
+            print(f"Connected to {self.host}:{self.port}", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"Connection failed: {e}", file=sys.stderr)
+            return False
+
+    def send_command(self, command, **params):
+        """Send command to server"""
+        cmd = {"command": command, **params}
+        message = json.dumps(cmd) + "\n"
+        try:
+            self.sock.send(message.encode('utf-8'))
+            return True
+        except Exception as e:
+            print(f"Failed to send command: {e}", file=sys.stderr)
+            return False
+
+    def receive_events(self):
+        """Receive and process events"""
+        try:
+            data = self.sock.recv(1024).decode('utf-8')
+            if not data:
+                print("Server disconnected", file=sys.stderr)
+                return False
+
+            self.buffer += data
+
+            while '\n' in self.buffer:
+                line, self.buffer = self.buffer.split('\n', 1)
+                try:
+                    event = json.loads(line)
+                    if not self.handle_event(event):
+                        return False
+                except json.JSONDecodeError:
+                    print(f"Invalid JSON: {line}", file=sys.stderr)
+
+            return True
+
+        except Exception as e:
+            print(f"Error receiving events: {e}", file=sys.stderr)
+            return False
+
+    def handle_event(self, event):
+        """Handle incoming event"""
+        event_type = event.get('type')
+
+        if event_type == 'recording_started':
+            print("Recording started - speak now!", file=sys.stderr)
+
+        elif event_type == 'chunk_ready':
+            chunk_num = event['chunk_num']
+            audio_file = event['audio_file']
+            is_final = event['is_final']
+
+            print(f"Chunk {chunk_num}: {audio_file}")
+            if is_final:
+                print("  (final chunk)")
+
+            # TODO: Process chunk (transcribe, etc.)
+
+        elif event_type == 'complete_file':
+            file_path = event['file_path']
+            print(f"Complete recording: {file_path}")
+
+        elif event_type == 'silence_warning':
+            message = event['message']
+            print(f"Warning: {message}", file=sys.stderr)
+
+        elif event_type == 'recording_stopped':
+            print("Recording stopped", file=sys.stderr)
+            return False  # Exit loop
+
+        elif event_type == 'error':
+            error = event['error']
+            print(f"Error: {error}", file=sys.stderr)
+
+        else:
+            print(f"Unknown event: {event_type}", file=sys.stderr)
+
+        return True
+
+    def stop(self):
+        """Send stop command"""
+        self.running = False
+        if self.sock:
+            self.send_command("stop")
+
+    def run(self):
+        """Main event loop"""
+        if not self.connect():
+            return 1
+
+        try:
+            while self.running:
+                if not self.receive_events():
+                    break
+        finally:
+            if self.sock:
+                self.sock.close()
+                print("Disconnected", file=sys.stderr)
+
+        return 0
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Whisper Stream Client')
+    parser.add_argument('--host', default='127.0.0.1', help='Server host')
+    parser.add_argument('--port', type=int, default=12341, help='Server port')
+
+    args = parser.parse_args()
+
+    client = WhisperStreamClient(args.host, args.port)
+    sys.exit(client.run())
+#+end_src
+
+** Running Complete Example
+
+Terminal 1 (Start server):
+#+begin_src bash
+python3 whisper_stream.py \
+  --tcp-port 12341 \
+  --output-dir ./recordings \
+  --filename-prefix test \
+  --silence-threshold 2.0
+#+end_src
+
+Terminal 2 (Start client):
+#+begin_src bash
+python3 client.py --port 12341
+#+end_src
+
+Output:
+#+begin_example
+Connected to 127.0.0.1:12341
+Recording started - speak now!
+Chunk 1: ./recordings/test_chunk_001.wav
+Chunk 2: ./recordings/test_chunk_002.wav
+^C
+Stopping recording...
+Chunk 3: ./recordings/test_chunk_003.wav
+  (final chunk)
+Complete recording: ./recordings/test-20260214-183520.wav
+Recording stopped
+Disconnected
+#+end_example
+
+* See Also
+
+- [[file:README.org][README.org]] - User documentation for WhisperDictation spoon
+- [[file:development.org][development.org]] - Architecture and development guide
+- [[https://github.com/snakers4/silero-vad][Silero VAD]] - Voice activity detection model
+- [[https://python-sounddevice.readthedocs.io/][sounddevice]] - Python audio library

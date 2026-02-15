@@ -10,6 +10,8 @@ import json
 import argparse
 import time
 import signal
+import socket
+import threading
 import numpy as np
 from pathlib import Path
 
@@ -36,6 +38,92 @@ def output_error(error_msg):
 def output_debug(msg):
     """Output a debug event."""
     output_event("debug", message=str(msg))
+
+
+# === TCP Server ===
+
+class TCPServer:
+    """TCP server for sending events to Hammerspoon client."""
+
+    def __init__(self, port):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(('127.0.0.1', port))
+        self.server_socket.listen(1)
+        self.client_socket = None
+        self.port = port
+
+    def wait_for_client(self, timeout=10):
+        """Accept single client connection with timeout."""
+        self.server_socket.settimeout(timeout)
+        try:
+            self.client_socket, addr = self.server_socket.accept()
+            self.client_socket.settimeout(None)  # Blocking mode for send
+            return True
+        except socket.timeout:
+            return False
+
+    def send_event(self, event_type, **kwargs):
+        """Send JSON event with newline delimiter.
+
+        Returns False if client disconnected, True otherwise.
+        """
+        if self.client_socket:
+            event = {"type": event_type, **kwargs}
+            message = json.dumps(event) + "\n"
+            try:
+                self.client_socket.sendall(message.encode('utf-8'))
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                # Client disconnected
+                return False
+        return True
+
+    def receive_command(self, timeout=0.1):
+        """Receive a command from client (non-blocking).
+
+        Returns command dict if received, None otherwise.
+        """
+        if not self.client_socket:
+            return None
+
+        try:
+            self.client_socket.settimeout(timeout)
+            data = self.client_socket.recv(1024)
+            if not data:
+                # Client disconnected
+                return {'command': 'disconnect'}
+
+            # Parse JSON command (newline-delimited)
+            for line in data.decode('utf-8').split('\n'):
+                line = line.strip()
+                if line:
+                    try:
+                        return json.loads(line)
+                    except json.JSONDecodeError:
+                        pass
+        except socket.timeout:
+            # No data available (normal)
+            return None
+        except (ConnectionResetError, BrokenPipeError):
+            # Client disconnected
+            return {'command': 'disconnect'}
+
+        return None
+
+    def close(self):
+        """Close server and client sockets."""
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+            self.client_socket = None
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except:
+                pass
 
 
 # === Dependency Checking ===
@@ -102,11 +190,12 @@ def convert_to_int16(audio_data):
 class ContinuousRecorder:
     """Records audio continuously and detects chunk boundaries using Silero VAD."""
 
-    def __init__(self, output_dir, filename_prefix,
+    def __init__(self, tcp_server, output_dir, filename_prefix,
                  silence_threshold=5.0,
                  min_chunk_duration=10.0,
                  max_chunk_duration=120.0,
                  sample_rate=16000):
+        self.tcp_server = tcp_server
         self.output_dir = Path(output_dir)
         self.filename_prefix = filename_prefix
         self.silence_threshold = silence_threshold
@@ -119,6 +208,9 @@ class ContinuousRecorder:
         self.current_chunk_audio = []
         self.current_chunk_start_time = None
 
+        # Full recording (all audio for single file save)
+        self.all_audio = []
+
         # Silence detection state
         self.silence_start_time = None
         self.perfect_silence_start_time = None
@@ -127,6 +219,7 @@ class ContinuousRecorder:
 
         # Control
         self.running = True
+        self.mic_off = False  # Track if stopped due to mic being off
 
         # Load VAD model
         self.vad_model = self._load_vad_model()
@@ -156,7 +249,7 @@ class ContinuousRecorder:
             speech_prob = self.vad_model(audio_tensor, self.sample_rate).item()
             return speech_prob > VAD_SPEECH_THRESHOLD
         except Exception as e:
-            output_error(f"VAD detection error: {e}")
+            self.tcp_server.send_event("error", error=f"VAD detection error: {e}")
             return True  # Assume speech to avoid losing audio
 
     def _save_chunk(self):
@@ -180,13 +273,13 @@ class ContinuousRecorder:
         return str(chunk_file)
 
     def _check_perfect_silence(self, audio_chunk):
-        """Check for perfect silence at startup only."""
+        """Check for perfect silence at startup only - verify mic is working."""
         # Only check during startup period
         if self.startup_silence_check_done:
             return
 
         if not is_perfect_silence(audio_chunk):
-            # Audio detected, stop checking
+            # Audio detected, mic is working - stop checking
             self.startup_silence_check_done = True
             self.perfect_silence_start_time = None
             return
@@ -196,19 +289,23 @@ class ContinuousRecorder:
             return
 
         silence_duration = time.time() - self.perfect_silence_start_time
-        if silence_duration >= PERFECT_SILENCE_DURATION and not self.mic_warning_shown:
-            output_event("silence_warning",
-                        message="Perfect silence detected - microphone may be off")
-            self.mic_warning_shown = True
-            self.startup_silence_check_done = True
+        if silence_duration >= PERFECT_SILENCE_DURATION:
+            # Microphone is off at startup - stop recording immediately
+            self.tcp_server.send_event("silence_warning",
+                                      message="Microphone off - stopping recording")
+            self.mic_off = True  # Flag that mic is off
+            self.running = False  # Stop recording
+            self.startup_silence_check_done = True  # Don't check again
 
     def _emit_chunk_ready(self, chunk_file, is_final=False):
         """Emit chunk_ready event."""
         if chunk_file:
-            output_event("chunk_ready",
-                        chunk_num=self.chunk_num,
-                        audio_file=chunk_file,
-                        is_final=is_final)
+            if not self.tcp_server.send_event("chunk_ready",
+                                             chunk_num=self.chunk_num,
+                                             audio_file=chunk_file,
+                                             is_final=is_final):
+                # Client disconnected, stop recording
+                self.running = False
 
     def _check_max_duration(self):
         """Check if chunk exceeded max duration and save if needed."""
@@ -258,24 +355,18 @@ class ContinuousRecorder:
     def audio_callback(self, indata, frames, time_info, status):
         """Callback for sounddevice audio stream."""
         if status:
-            output_error(f"Audio callback status: {status}")
+            self.tcp_server.send_event("error", error=f"Audio callback status: {status}")
 
         # Extract mono audio
         audio_chunk = indata[:, 0].copy()
-
-        # Debug: log first callback
-        if len(self.current_chunk_audio) == 0:
-            output_debug(f"First audio callback: frames={frames}, shape={indata.shape}")
 
         # Check for mic off
         self._check_perfect_silence(audio_chunk)
 
         # Add to current chunk
         self.current_chunk_audio.append(audio_chunk)
-
-        # Debug: log buffer count every 10 callbacks
-        if len(self.current_chunk_audio) % 10 == 0:
-            output_debug(f"Audio buffers: {len(self.current_chunk_audio)}")
+        # Also accumulate for complete recording file
+        self.all_audio.append(audio_chunk)
 
         # Check max duration boundary
         if self._check_max_duration():
@@ -291,42 +382,69 @@ class ContinuousRecorder:
         """Start continuous recording."""
         import sounddevice as sd
 
-        output_debug(f"start() called, sample_rate={self.sample_rate}")
         self.current_chunk_start_time = time.time()
-        output_event("recording_started")
+        if not self.tcp_server.send_event("recording_started"):
+            # Client disconnected before recording started
+            self.running = False
+            return
 
         signal.signal(signal.SIGINT, lambda sig, frame: setattr(self, 'running', False))
         signal.signal(signal.SIGTERM, lambda sig, frame: setattr(self, 'running', False))
 
         try:
-            output_debug("Starting InputStream")
             with sd.InputStream(callback=self.audio_callback,
                               channels=1,
                               samplerate=self.sample_rate,
                               blocksize=int(self.sample_rate * 0.5),
                               dtype=np.float32):
-                output_debug("InputStream started, entering loop")
                 while self.running:
-                    time.sleep(0.1)
-                output_debug(f"Exiting loop, running={self.running}")
+                    # Check for commands from client
+                    cmd = self.tcp_server.receive_command(timeout=0.1)
+                    if cmd:
+                        if cmd.get('command') == 'stop':
+                            self.running = False
+                        elif cmd.get('command') == 'disconnect':
+                            self.running = False
         except Exception as e:
-            output_debug(f"Exception in start(): {e}")
-            output_error(f"Recording error: {e}")
+            self.tcp_server.send_event("error", error=f"Recording error: {e}")
         finally:
-            output_debug("Finally block, calling _finalize_recording")
             self._finalize_recording()
+
+    def _save_complete_recording(self):
+        """Save complete recording as single timestamped file."""
+        if not self.all_audio:
+            return None
+
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        complete_file = self.output_dir / f"{self.filename_prefix}-{timestamp}.wav"
+
+        audio_data = np.concatenate(self.all_audio)
+        audio_data = convert_to_int16(audio_data)
+
+        import scipy.io.wavfile
+        scipy.io.wavfile.write(str(complete_file), self.sample_rate, audio_data)
+
+        return str(complete_file)
 
     def _finalize_recording(self):
         """Save final chunk and emit recording_stopped event."""
-        output_debug(f"_finalize_recording: have audio buffers: {len(self.current_chunk_audio)}")
+        # Save complete recording as single file (for auditing/re-processing)
+        complete_file = self._save_complete_recording()
+        if complete_file:
+            # Notify Lua about complete file path (for saving matching .txt file)
+            self.tcp_server.send_event("complete_file", file_path=complete_file)
+
+        # Don't save or transcribe final chunk if mic was off
+        if self.mic_off:
+            self.tcp_server.send_event("recording_stopped")
+            return
+
         if self.current_chunk_audio:
-            output_debug("Saving final chunk")
             chunk_file = self._save_chunk()
-            output_debug(f"Final chunk saved: {chunk_file}")
             self._emit_chunk_ready(chunk_file, is_final=True)
-        else:
-            output_debug("No audio to save in final chunk")
-        output_event("recording_stopped")
+
+        self.tcp_server.send_event("recording_stopped")
 
 
 # === Main ===
@@ -337,6 +455,8 @@ def main():
     )
     parser.add_argument("--check-deps", action="store_true",
                        help="Check dependencies and exit")
+    parser.add_argument("--tcp-port", type=int, default=12341,
+                       help="TCP server port")
     parser.add_argument("--output-dir", help="Output directory for chunks")
     parser.add_argument("--filename-prefix", help="Prefix for chunk filenames")
     parser.add_argument("--silence-threshold", type=float, default=5.0,
@@ -357,14 +477,29 @@ def main():
         sys.exit(0)
 
     if not args.output_dir or not args.filename_prefix:
-        output_error("Missing required arguments")
+        print(json.dumps({"status": "error", "error": "Missing required arguments"}),
+              file=sys.stderr, flush=True)
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    tcp_server = None
     try:
+        # Start TCP server
+        tcp_server = TCPServer(args.tcp_port)
+        print(json.dumps({"status": "listening", "port": args.tcp_port}),
+              file=sys.stderr, flush=True)
+
+        # Wait for client connection
+        if not tcp_server.wait_for_client(timeout=10):
+            print(json.dumps({"status": "error", "error": "Client connection timeout"}),
+                  file=sys.stderr, flush=True)
+            sys.exit(1)
+
+        # Start recording
         recorder = ContinuousRecorder(
+            tcp_server,
             args.output_dir,
             args.filename_prefix,
             args.silence_threshold,
@@ -373,10 +508,17 @@ def main():
         )
         recorder.start()
     except Exception as e:
-        output_error(str(e))
+        error_msg = str(e)
+        if tcp_server:
+            tcp_server.send_event("error", error=error_msg)
+        print(json.dumps({"status": "error", "error": error_msg}),
+              file=sys.stderr, flush=True)
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
+    finally:
+        if tcp_server:
+            tcp_server.close()
 
 
 if __name__ == "__main__":
