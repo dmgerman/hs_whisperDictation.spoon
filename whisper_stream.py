@@ -18,7 +18,7 @@ from pathlib import Path
 
 # === Configuration Constants ===
 SILENCE_AMPLITUDE_THRESHOLD = 0.01
-PERFECT_SILENCE_DURATION = 3.0
+PERFECT_SILENCE_DURATION_AT_START = 2.0  # Detect mic off at recording start
 VAD_SPEECH_THRESHOLD = 0.5
 VAD_WINDOW_SECONDS = 0.5
 
@@ -323,7 +323,7 @@ class ContinuousRecorder:
             return
 
         silence_duration = time.time() - self.perfect_silence_start_time
-        if silence_duration >= PERFECT_SILENCE_DURATION:
+        if silence_duration >= PERFECT_SILENCE_DURATION_AT_START:
             # Microphone is off at startup - stop recording immediately
             self.tcp_server.send_event("silence_warning",
                                       message="Microphone off - stopping recording")
@@ -530,11 +530,11 @@ def main():
                        help="TCP server port")
     parser.add_argument("--output-dir", help="Output directory for chunks")
     parser.add_argument("--filename-prefix", help="Prefix for chunk filenames")
-    parser.add_argument("--silence-threshold", type=float, default=5.0,
+    parser.add_argument("--silence-threshold", type=float, default=2.0,
                        help="Silence duration to trigger chunk (seconds)")
-    parser.add_argument("--min-chunk-duration", type=float, default=10.0,
+    parser.add_argument("--min-chunk-duration", type=float, default=3.0,
                        help="Minimum chunk duration (seconds)")
-    parser.add_argument("--max-chunk-duration", type=float, default=120.0,
+    parser.add_argument("--max-chunk-duration", type=float, default=600.0,
                        help="Maximum chunk duration (seconds)")
 
     args = parser.parse_args()

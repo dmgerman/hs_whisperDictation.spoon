@@ -135,8 +135,8 @@ RecordingBackends.pythonstream = {
     port = 12341,
     serverStartupTimeout = 5.0,  -- Seconds to wait for server ready
     silenceThreshold = 2.0,      -- Seconds of silence to trigger chunk
-    minChunkDuration = 10.0,     -- Minimum chunk length
-    maxChunkDuration = 120.0,    -- Maximum chunk length
+    minChunkDuration = 3.0,     -- Minimum chunk length
+    maxChunkDuration = 600.0,    -- Maximum chunk length
   },
 
   -- Internal state
@@ -176,9 +176,33 @@ RecordingBackends.pythonstream = {
   end,
 
   _startServer = function(self, outputDir, filenamePrefix)
-    -- Clean up any zombie processes on this port first
-    os.execute(string.format("lsof -ti:%d | xargs kill -9 2>/dev/null", self.config.port))
-    hs.timer.usleep(200000)  -- 200ms for cleanup
+    -- Check if port is in use by another process
+    local handle = io.popen(string.format("lsof -i :%d 2>/dev/null", self.config.port))
+    local result = handle and handle:read("*a") or ""
+    if handle then handle:close() end
+
+    if result and #result > 0 then
+      -- Port is in use - try to clean up zombies
+      print(string.format("[DEBUG BACKEND] Port %d in use, attempting cleanup...", self.config.port))
+      os.execute(string.format("lsof -ti:%d | xargs kill -9 2>/dev/null", self.config.port))
+      hs.timer.usleep(500000)  -- 500ms for cleanup
+
+      -- Check again if port is still in use
+      handle = io.popen(string.format("lsof -i :%d 2>/dev/null", self.config.port))
+      result = handle and handle:read("*a") or ""
+      if handle then handle:close() end
+
+      if result and #result > 0 then
+        -- Port still in use after cleanup attempt
+        local errorMsg = string.format(
+          "Port %d is in use by another process. Change pythonstreamConfig.port or kill the process:\nlsof -ti:%d | xargs kill",
+          self.config.port, self.config.port
+        )
+        print("[ERROR] " .. errorMsg)
+        hs.alert.show("⚠️ Port " .. self.config.port .. " in use!\nSee console for details")
+        return false, "Port " .. self.config.port .. " is already in use"
+      end
+    end
 
     local args = {
       self.config.scriptPath,
@@ -224,6 +248,11 @@ RecordingBackends.pythonstream = {
           local ok, errorData = pcall(hs.json.decode, stdErr)
           if ok and errorData and errorData.error then
             serverError = errorData.error
+            -- Check for port conflict specifically
+            if serverError:match("Address already in use") or serverError:match("Errno 48") then
+              print(string.format("[ERROR] Port %d is in use by another process", self.config.port))
+              hs.alert.show(string.format("⚠️ Port %d in use!\nChange pythonstreamConfig.port", self.config.port), 5)
+            end
           else
             serverError = "Unknown server error"
           end
