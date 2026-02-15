@@ -397,7 +397,6 @@ obj.chunkCount = 0                  -- Total chunks received
 obj.pendingChunks = {}              -- [chunkNum] = true while transcribing
 obj.completedChunks = {}            -- [chunkNum] = text when done
 obj.allChunksText = {}              -- Ordered array of all chunk texts for final concatenation
-obj.recordingBackendFallback = false  -- Track if we fell back to sox
 
 -- === Helpers ===
 local function ensureDir(path)
@@ -1352,7 +1351,6 @@ local function resetChunkState()
   obj.pendingChunks = {}
   obj.completedChunks = {}
   obj.allChunksText = {}
-  obj.recordingBackendFallback = false
   obj.completeRecordingFile = nil  -- Path to complete WAV file
 end
 
@@ -1394,7 +1392,6 @@ function obj:beginTranscribe(callbackOrPaste)
       self.logger:warn("Falling back to Sox backend")
       hs.alert.show("Python stream failed, using simple recording mode")
       self.recordingBackend = "sox"
-      self.recordingBackendFallback = true
       backend = self.recordingBackends.sox
 
       success, err = tryStartRecording(backend)
@@ -1414,8 +1411,8 @@ function obj:beginTranscribe(callbackOrPaste)
 end
 
 function obj:endTranscribe()
-  -- Get active recording backend (may be fallback)
-  local backend = self.recordingBackends[self.recordingBackendFallback and "sox" or self.recordingBackend]
+  -- Get active recording backend
+  local backend = self.recordingBackends[self.recordingBackend]
   if not backend then
     self.logger:error("Unknown recording backend", true)
     return self
@@ -1450,21 +1447,19 @@ end
 -- @param callbackOrPaste (function|boolean|nil): If function, uses callback. If true, enables auto-paste. If nil/false, clipboard only.
 -- @return self
 function obj:toggleTranscribe(callbackOrPaste)
-  -- Check if any backend is currently recording
-  local isRecording = false
-  for _, backend in pairs(self.recordingBackends) do
-    if backend:isRecording() then
-      isRecording = true
-      break
-    end
-  end
-
-  if not isRecording then
+  if not self:isRecording() then
     self:beginTranscribe(callbackOrPaste)
   else
     self:endTranscribe()
   end
   return self
+end
+
+--- Check if currently recording.
+-- @return (boolean): true if currently recording
+function obj:isRecording()
+  local backend = self.recordingBackends[self.recordingBackend]
+  return backend and backend:isRecording() or false
 end
 
 --- Show a chooser with recent recordings and re-transcribe the selected one.
