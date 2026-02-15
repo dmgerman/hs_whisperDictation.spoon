@@ -1,0 +1,1 @@
+show the number of chunks and the total length of the string.

@@ -1,0 +1,2 @@
+make it fully polymorphic such that it is possible to simply replace a recording back end with another one.
+At this point the code was checking for socks and chunks everywhere.

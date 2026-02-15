@@ -1,665 +1,493 @@
-#+title: WhisperDictation Spoon
+#+title: WhisperDictation - Voice to Text for Mac
 #+author: dmg
 #+date: 2025
-#+language: en
 
-* Overview
+Speak and see your words appear as text. Works offline, supports 100+ languages, and puts privacy first.
 
-WhisperDictation is a [[https://www.hammerspoon.org/][Hammerspoon]] Spoon that provides local, offline voice dictation powered by [[https://openai.com/research/whisper][OpenAI's Whisper]] model.
+* What Does It Do?
 
-Records audio from your microphone, transcribes it locally, and copies the text to your clipboard. A menubar indicator shows recording status and elapsed time.
+1. *Press a hotkey* to start recording
+2. *Speak* your text
+3. *Press the hotkey again* to stop
+4. *Get your text* - either pasted automatically or copied to clipboard
 
-** Performance
+That's it!
 
-Using the Python stream backend with persistent server:
-- *First recording after reload*: ~2-3 seconds (one-time VAD model loading)
-- *All subsequent recordings*: Instant start (server stays warm)
-- *No startup lag*: Server initializes asynchronously in background
+* Quick Start
 
-** Key Features
+** 1. Choose Your Setup
 
-- Local voice-to-text transcription (no cloud required)
-- Multi-language support
-- Automatic clipboard copy
-- Smart auto-paste with activity monitoring
-- Asynchronous processing
-- Configurable recording timeout
-- Multiple recording backends (simple vs continuous with VAD)
-- Multiple transcription backends (CLI, HTTP server)
+Pick based on what you value most:
 
-* Requirements
+*** 🚀 *Fast & Simple* (Cloud API - Recommended for Beginners)
 
-** Recording Backend (choose one)
+#+begin_src lua
+-- Add to ~/.hammerspoon/init.lua
+hs.loadSpoon("hs_whisperDictation")
 
-The recording backend captures audio from your microphone. Two backends are available:
+-- Configure
+wd.transcriptionMethod = "groq"  -- Fast cloud API
+wd.groqApiKey = "your-api-key-here"  -- Get free key from groq.com
+wd.recordingBackend = "sox"  -- Simple recording
 
-*** Sox Backend (Simple)
+-- Set your hotkey (Ctrl+Cmd+D)
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"}
+})
 
-Simple one-shot recording. Required even if using Python Stream as fallback.
+wd:start()
+#+end_src
+
+*Install:* =brew install sox=
+
+*Pros:* Super fast, easy setup, always works
+
+*Cons:* Requires internet, sends audio to Groq (privacy trade-off)
+
+*** 🔒 *Private & Offline* (Apple Silicon Macs Only)
+
+#+begin_src lua
+hs.loadSpoon("hs_whisperDictation")
+
+wd.transcriptionMethod = "whisperkit"  -- Apple optimized
+wd.recordingBackend = "sox"
+
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"}
+})
+
+wd:start()
+#+end_src
+
+*Install:* =brew install sox whisperkit-cli=
+
+*Pros:* 100% private, offline, Apple Silicon optimized
+
+*Cons:* Slower than cloud, requires Mac with M1/M2/M3 chip
+
+*** ⚡ *Pro Setup* (Real-time, Smart Chunking)
+
+#+begin_src lua
+hs.loadSpoon("hs_whisperDictation")
+
+wd.recordingBackend = "pythonstream"  -- Smart recording
+wd.transcriptionMethod = "groq"  -- Fast transcription
+
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"}
+})
+
+wd:start()
+#+end_src
+
+*Install:*
 
 #+begin_src bash
-brew install sox
+brew install sox  # Fallback
+pip install sounddevice scipy torch  # Python backend
 #+end_src
 
-*Features:*
-- Single WAV file per recording
-- No chunking or real-time processing
-- Simple and reliable
-- Default fallback if Python Stream unavailable
+*Pros:* Real-time chunk transcription, intelligent silence detection
 
-*Configuration:*
+*Cons:* More setup required
+
+** 2. Set Your Language
+
 #+begin_src lua
-wd.recordingBackend = "sox"  -- Simple recording (default fallback)
+wd.languages = {"en"}  -- English only
+-- Or multiple:
+wd.languages = {"en", "ja", "es", "fr"}  -- English, Japanese, Spanish, French
 #+end_src
 
-*** Python Stream Backend (Recommended)
+Press *Ctrl+Cmd+L* to switch languages while running.
 
-Advanced continuous recording with Silero VAD for intelligent chunking.
+** 3. Test It
 
-#+begin_src bash
-# Install Python dependencies
-pip install sounddevice scipy torch
-#+end_src
+1. Press *Ctrl+Cmd+D* (or your chosen hotkey)
+2. See the menubar icon change (🎙️ recording indicator)
+3. Speak: "Hello world, this is a test"
+4. Press *Ctrl+Cmd+D* again
+5. Your text appears in the clipboard - paste it anywhere!
 
-*Features:*
-- **Persistent server**: Starts once, stays running (instant subsequent recordings)
-- **Silero VAD**: Automatic chunk detection based on silence (2s threshold)
-- **Real-time transcription**: Chunks transcribed as they arrive
-- **Smart chunking**: Min 3s, max 10 minutes, silence-based splits
-- **Microphone detection**: Auto-stops if mic is off (perfect silence detection)
-- **Uses system default microphone**: Set in System Settings → Sound → Input
+* Common Use Cases
 
-*Performance:*
-- First recording after reload: ~2-3s (one-time VAD model loading)
-- All subsequent recordings: **Instant** (server stays warm)
+** Copy to Clipboard
 
-*Configuration:*
+Default behavior - transcribed text goes to clipboard.
+
 #+begin_src lua
-wd.recordingBackend = "pythonstream"  -- Continuous recording with VAD
-
-wd.pythonstreamConfig = {
-  port = 12341,                  -- TCP server port
-  host = "127.0.0.1",
-  serverStartupTimeout = 5.0,
-  silenceThreshold = 2.0,        -- Seconds of silence to trigger chunk
-  minChunkDuration = 3.0,       -- Minimum chunk length
-  maxChunkDuration = 600.0,      -- Maximum chunk length
-}
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"}
+})
 #+end_src
 
-** Transcription Backend (choose one)
+*Usage:* Press hotkey → Speak → Press hotkey → Paste (Cmd+V)
 
-*** WhisperKit CLI
+** Auto-Paste (Beta)
 
-Apple-optimized implementation. Models download automatically on first use.
+Text automatically pastes if you don't type/click during recording.
+
+#+begin_src lua
+wd.monitorUserActivity = true
+
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"},      -- Copy mode
+  togglePaste = {{"ctrl", "cmd"}, "p"}  -- Auto-paste mode
+})
+#+end_src
+
+*Usage:* Press *Ctrl+Cmd+P* → Speak → Press *Ctrl+Cmd+P* → Text auto-pastes!
+
+*When it auto-pastes:*
+- ✅ You stayed in the same app
+- ✅ You didn't type anything
+- ✅ You didn't click the mouse
+
+*When it just copies to clipboard:*
+- ⚠️ You typed something
+- ⚠️ You clicked the mouse
+- ⚠️ You switched to a different app
+
+** Multiple Languages
+
+Switch on the fly:
+
+#+begin_src lua
+wd.languages = {"en", "ja", "es"}
+
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"},
+  nextLang = {{"ctrl", "cmd"}, "l"}  -- Switch language
+})
+#+end_src
+
+*Usage:* Press *Ctrl+Cmd+L*, choose language, then record
+
+* Transcription Methods Explained
+
+** groq (Cloud API)
+
+*What it is:* Sends audio to Groq's servers for transcription
+
+*Speed:* ⚡⚡⚡ Very fast (1-2 seconds)
+
+*Privacy:* Audio leaves your Mac
+
+*Cost:* Free tier available
+
+*Best for:* Speed and convenience
+
+*Setup:*
+
+#+begin_src lua
+wd.transcriptionMethod = "groq"
+wd.groqApiKey = "gsk_..."  -- Get from groq.com
+#+end_src
+
+** whisperkit (Apple Silicon)
+
+*What it is:* Uses Apple's Neural Engine on your Mac
+
+*Speed:* ⚡⚡ Fast (3-5 seconds)
+
+*Privacy:* 100% local, nothing leaves your Mac
+
+*Cost:* Free
+
+*Best for:* Privacy-conscious Mac users
+
+*Setup:*
 
 #+begin_src bash
 brew install whisperkit-cli
 #+end_src
 
-Available models: =tiny=, =base=, =small=, =medium=, =large-v3= (best accuracy, slowest)
+#+begin_src lua
+wd.transcriptionMethod = "whisperkit"
+#+end_src
 
-*** Whisper CLI (default)
+** whispercli (CPU/GPU)
 
-C++ implementation via [[https://github.com/ggerganov/whisper.cpp][whisper.cpp]]. Requires manual model download.
+*What it is:* Runs Whisper on your CPU/GPU
+
+*Speed:* ⚡ Slower (10-30 seconds)
+
+*Privacy:* 100% local
+
+*Cost:* Free
+
+*Best for:* Non-Apple Silicon Macs
+
+*Setup:*
 
 #+begin_src bash
 brew install whisper-cli
-
 # Download model
-mkdir -p /usr/local/whisper && cd /usr/local/whisper
+mkdir -p /usr/local/whisper
+cd /usr/local/whisper
 wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 #+end_src
 
-*** Whisper Server
-
-Persistent HTTP server - fastest for repeated use since model stays loaded.
-
-#+begin_src bash
-# Build from whisper.cpp
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp && mkdir build && cd build
-cmake .. && cmake --build . --config Release
-
-# Download model (same as Whisper CLI)
-#+end_src
-
-* Installation
-
-Add to your =~/.hammerspoon/init.lua=:
-
-#+begin_src lua
-wd = hs.loadSpoon("hs_whisperDictation")
-wd.languages = {"en", "ja", "es", "fr"}
-wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},
-    nextLang = {{"ctrl", "cmd"}, "l"},
-})
-wd:start()
-#+end_src
-
-** With Auto-Paste Feature
-
-#+begin_src lua
-wd = hs.loadSpoon("hs_whisperDictation")
-wd.languages = {"en", "ja", "es", "fr"}
-wd.monitorUserActivity = true  -- Enable activity monitoring
-wd.pasteWithEmacsYank = true   -- Use Ctrl-Y in Emacs (optional)
-wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},        -- Copy mode
-    togglePaste = {{}, "F15"},              -- Auto-paste mode
-    nextLang = {{"ctrl", "cmd"}, "l"},
-})
-wd:start()
-#+end_src
-
-** Backend Configuration
-
-*** Recording Backend
-
-*Python Stream (Recommended):*
-#+begin_src lua
-wd.recordingBackend = "pythonstream"  -- Persistent server with VAD
-#+end_src
-
-*Sox (Simple):*
-#+begin_src lua
-wd.recordingBackend = "sox"  -- One-shot recording
-#+end_src
-
-*** Transcription Backend
-
-*WhisperKit CLI:*
-#+begin_src lua
-wd.transcriptionMethod = "whisperkitcli"
-wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
-#+end_src
-
-*Whisper CLI (default):*
 #+begin_src lua
 wd.transcriptionMethod = "whispercli"
 wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
 #+end_src
 
-*Whisper Server:*
-#+begin_src lua
-wd.transcriptionMethod = "whisperserver"
-wd.serverConfig.executable = "/path/to/whisper-server"
-wd.serverConfig.modelPath = "/usr/local/whisper/ggml-large-v3-turbo.bin"
-#+end_src
+** whisperserver (HTTP Server)
 
-*** Recommended Combination
+*What it is:* Local HTTP server (model stays loaded)
 
-For best performance (instant recording start, persistent servers):
+*Speed:* ⚡⚡ Fast after first use
 
-#+begin_src lua
-wd = hs.loadSpoon("hs_whisperDictation")
-wd.recordingBackend = "pythonstream"      -- Persistent recording server
-wd.transcriptionMethod = "whisperserver"  -- Persistent transcription server
-wd.languages = {"en", "ja"}
-wd:start()
-#+end_src
+*Privacy:* 100% local
 
-* Auto-Paste Feature
+*Cost:* Free
 
-The auto-paste feature automatically pastes transcribed text when you remain focused in the same application without typing or clicking during recording.
+*Best for:* Heavy users (model stays in RAM)
 
-** Setup
+*Setup:* See [[file:docs/SERVER_SETUP.md][Server Setup Guide]]
 
-Enable activity monitoring:
+* Recording Backends Explained
+
+** sox (Simple)
+
+*What it is:* Records one file per session
+
+*When to use:* Simple needs, fallback option
+
+*Install:* =brew install sox=
 
 #+begin_src lua
-wd.monitorUserActivity = true  -- Enable activity tracking
-wd:bindHotKeys({
-    toggle = {{"ctrl", "cmd"}, "d"},      -- Copy to clipboard only
-    togglePaste = {{"ctrl", "cmd"}, "p"}, -- Auto-paste mode
-    nextLang = {{"ctrl", "cmd"}, "l"},
-})
+wd.recordingBackend = "sox"
 #+end_src
 
-** How It Works
+** pythonstream (Smart)
 
-*** Copy Mode (=toggle= hotkey)
+*What it is:* Real-time recording with smart chunking
 
-Press toggle hotkey → Record → Press again → Text copied to clipboard
+*Features:*
+- Detects silence and creates chunks automatically
+- Transcribes while you're still talking
+- Faster overall for long recordings
 
-*** Auto-Paste Mode (=togglePaste= hotkey)
+*When to use:* Long dictations, want faster results
 
-Press togglePaste hotkey → Record → Press again → Smart behavior:
+*Install:*
 
-*Text auto-pastes when:*
-- ✓ Same application is focused
-- ✓ At most 1 key pressed (just the stop key)
-- ✓ No mouse clicks
-- ✓ No application switches
-
-*Text stays in clipboard with warning when:*
-- ⚠ 2+ keys pressed (user was typing)
-- ⚠ Any mouse clicks detected
-- ⚠ Application switched during recording
-- ⚠ Different app focused at end
-
-** Activity Detection Details
-
-*** What Counts as Activity
-
-| Event Type       | Counts as Activity? | Notes                               |
-|------------------+---------------------+-------------------------------------|
-| Stop key press   | No                  | ≤1 non-modifier key allowed         |
-| Modifier keys    | No                  | Cmd, Ctrl, Alt, Shift don't count   |
-| Typing 2+ keys   | Yes                 | Real typing activity                |
-| Mouse clicks     | Yes                 | Left, right, middle button          |
-| Mouse movement   | No                  | Movement ignored                    |
-| App switch       | Yes                 | Switching to different application  |
-
-*** Examples
-
-#+begin_example
-# Scenario 1: No activity (auto-paste)
-Press F15 → Speak → Press F15 → Text pastes automatically ✓
-
-# Scenario 2: Typed while recording (clipboard only)
-Press F15 → Speak → Type "hello" → Press F15
-Warning: "User activity detected (5 keys) - text copied to clipboard"
-
-# Scenario 3: Clicked mouse (clipboard only)
-Press F15 → Speak → Click mouse → Press F15
-Warning: "User activity detected (1 click) - text copied to clipboard"
-
-# Scenario 4: Switched apps (clipboard only)
-Press F15 in Terminal → Speak → Switch to Chrome → Press F15
-Warning: "Application changed - text copied to clipboard"
-#+end_example
-
-** Advanced Usage
-
-*** Programmatic Auto-Paste
+#+begin_src bash
+pip install sounddevice scipy torch
+#+end_src
 
 #+begin_src lua
--- Auto-paste mode
-wd:toggleTranscribe(true)
-
--- Copy-only mode
-wd:toggleTranscribe(false)
-
--- Custom callback (no activity tracking)
-wd:toggleTranscribe(function(text)
-  print("Transcribed: " .. text)
-end)
+wd.recordingBackend = "pythonstream"
 #+end_src
 
-*** Configuration Options
+* Configuration Reference
+
+** Basic Settings
 
 #+begin_src lua
-wd.monitorUserActivity = true  -- Enable/disable monitoring
-wd.autoPasteDelay = 0.1         -- Delay before paste (seconds)
-wd.pasteWithEmacsYank = true    -- Use Ctrl-Y in Emacs instead of Cmd-V
+-- Languages
+wd.languages = {"en", "ja"}  -- Available languages
+wd.currentLang = "en"         -- Default language
+
+-- Directories
+wd.tempDir = "/tmp/whisper_dict"  -- Where audio files are saved
+
+-- Timeouts
+wd.timeoutSeconds = 1800  -- Auto-stop after 30 minutes (nil = no limit)
+
+-- UI
+wd.showRecordingIndicator = true  -- Show red dot while recording
 #+end_src
 
-** Emacs Integration
-
-By default, auto-paste uses =Cmd-V= for all applications. If you use Emacs, you can enable Emacs-specific paste behavior:
+** Transcription Method Settings
 
 #+begin_src lua
-wd.pasteWithEmacsYank = true
+-- Groq
+wd.groqApiKey = "gsk_..."
+wd.groqModel = "whisper-large-v3"  -- or "whisper-large-v3-turbo"
+
+-- WhisperKit
+wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
+
+-- Whisper CLI
+wd.transcriptionMethods.whispercli.config.modelPath = "/path/to/model.bin"
+
+-- Whisper Server
+wd.serverConfig.port = 8080
+wd.serverConfig.host = "127.0.0.1"
 #+end_src
 
-When enabled:
-- In Emacs (bundle ID =org.gnu.Emacs=): Uses =Ctrl-Y= to yank from kill ring
-- In all other applications: Uses =Cmd-V= as normal
-
-This ensures transcribed text pastes correctly in Emacs without interfering with other applications.
-
-* Configuration
-
-** Properties
-
-| Property                 | Default                 | Description                                             |
-|--------------------------+-------------------------+---------------------------------------------------------|
-| =transcriptionMethod=    | "whispercli"            | Backend: whisperkitcli/whispercli/whisperserver         |
-| =languages=              | {"en"}                  | Available languages                                     |
-| =tempDir=                | "/tmp/whisper_dict"     | Recording storage directory                             |
-| =timeoutSeconds=         | 1800                    | Auto-stop timeout (nil to disable)                      |
-| =showRecordingIndicator= | true                    | Show red circle while recording                         |
-| =monitorUserActivity=    | false                   | Enable activity monitoring for auto-paste               |
-| =autoPasteDelay=         | 0.1                     | Delay (seconds) before auto-paste                       |
-| =pasteWithEmacsYank=     | false                   | Use Ctrl-Y for paste in Emacs (org.gnu.Emacs)           |
-
-For detailed customization (icons, indicator styling, logging, server config), see [[file:configuration.org][configuration.org]].
-
-* Usage
-
-** Hotkeys
-
-| Hotkey        | Default Binding | Description                                    |
-|---------------+-----------------+------------------------------------------------|
-| =toggle=      | Ctrl+Cmd+D      | Toggle recording (copy to clipboard)           |
-| =togglePaste= | (not bound)     | Toggle recording with auto-paste               |
-| =nextLang=    | Ctrl+Cmd+L      | Open language chooser                          |
-| =retranscribe=| (not bound)     | Re-transcribe from recent recordings           |
-
-** Recording
-
-*** Copy Mode (toggle hotkey)
-
-1. Press toggle hotkey (default: Ctrl+Cmd+D) or click menubar icon to start
-2. Menubar shows elapsed time and language
-3. Press again to stop - audio is transcribed and copied to clipboard
-
-*** Auto-Paste Mode (togglePaste hotkey)
-
-Requires =monitorUserActivity = true=
-
-1. Press togglePaste hotkey to start
-2. Speak your text
-3. Press again to stop
-4. If no activity detected and same app focused → text auto-pastes
-5. If activity detected → warning shown, text in clipboard only
-
-** Language Switching
-
-Press language hotkey (default: Ctrl+Cmd+L) to open chooser.
-
-** Files Generated
-
-#+begin_src
-/tmp/whisper_dict/
-├── en-20240101-120000.wav    # Audio
-├── en-20240101-120000.txt    # Transcript
-#+end_src
-
-* API Reference
-
-** Core Methods
-
-- =start()= - Initialize spoon and menubar
-- =stop()= - Clean up and remove menubar
-- =toggleTranscribe([param])= - Toggle recording (see parameter overloading below)
-- =bindHotKeys(mapping)= - Bind hotkeys
-
-** Parameter Overloading
-
-The =toggleTranscribe()= method accepts different parameter types:
-
-*** No Parameter (default)
-#+begin_src lua
-wd:toggleTranscribe()  -- Copy to clipboard only
-#+end_src
-
-*** Boolean Parameter
-#+begin_src lua
-wd:toggleTranscribe(true)   -- Auto-paste if no activity
-wd:toggleTranscribe(false)  -- Copy to clipboard only (same as no param)
-#+end_src
-
-*** Function Parameter (callback)
-#+begin_src lua
-wd:toggleTranscribe(function(text)
-  -- Custom handling instead of clipboard
-  -- Note: Activity monitoring is disabled when using callback
-  print("Transcribed: " .. text)
-end)
-#+end_src
-
-** Recording with Callback
+** Recording Backend Settings
 
 #+begin_src lua
-wd:beginTranscribe(function(text)
-  -- Custom handling instead of clipboard
-  print("Got: " .. text)
-end)
--- ... later ...
-wd:endTranscribe()
+-- Python Stream
+wd.pythonstreamConfig = {
+  port = 12341,
+  silenceThreshold = 2.0,   -- Seconds of silence before chunk split
+  minChunkDuration = 3.0,   -- Minimum chunk length
+  maxChunkDuration = 600.0, -- Maximum chunk length
+}
 #+end_src
 
-** Server Methods (whisperserver only)
-
-=startServer()=, =stopServer()=, =isServerRunning()=, =ensureServer()= - See [[file:configuration.org][configuration.org]].
-
-** Logger
+** Auto-Paste Settings
 
 #+begin_src lua
-wd.logger:setLevel("DEBUG")  -- DEBUG/INFO/WARN/ERROR
+wd.monitorUserActivity = true  -- Enable activity monitoring
+wd.autoPasteDelay = 0.1         -- Delay before pasting (seconds)
+wd.pasteWithEmacsYank = false   -- Use Ctrl-Y for Emacs (if true)
 #+end_src
 
 * Troubleshooting
 
-** Quick Debugging Commands
+** "No audio recorded"
 
-Copy-paste these into Hammerspoon Console (⌘⌥⌃C) for instant diagnostics:
+*Fix:*
+1. Check microphone permissions: System Settings → Privacy & Security → Microphone → Enable Hammerspoon
+2. Check microphone selection: System Settings → Sound → Input → Choose your mic
+3. Test recording: =sox -d test.wav= (speak for 5 seconds, then Ctrl+C), then =afplay test.wav=
 
-#+begin_src lua
--- 1. Check recording backend status
-print("Backend:", wd.recordingBackend)
-if wd.recordingBackend == "pythonstream" then
-  print("Server running:", wd.recordingBackends.pythonstream:isServerRunning())
-end
+** "Empty transcription"
 
--- 2. List recent recordings with sizes
-print(hs.execute("ls -lht /tmp/whisper_dict/*.wav 2>/dev/null | head -5"))
+*Fix:*
+1. Verify audio file: =ls -lh /tmp/whisper_dict/*.wav= (should be >100KB)
+2. Play recording: =afplay /tmp/whisper_dict/en-*.wav | tail -1=
+3. If silent, check microphone in System Settings
 
--- 3. Play most recent recording
-latest = hs.execute("ls -t /tmp/whisper_dict/*.wav 2>/dev/null | head -1"):gsub("\n", "")
-if latest ~= "" then hs.execute("afplay '" .. latest .. "'") end
+** "Python stream server won't start"
 
--- 4. Check file count and total size
-print(hs.execute("du -sh /tmp/whisper_dict 2>/dev/null && ls /tmp/whisper_dict/*.wav 2>/dev/null | wc -l"))
+*Fix:*
 
--- 5. Check Python server process
-print(hs.execute("lsof -i :12341 2>/dev/null"))
-
--- 6. Enable debug logging
-wd.logger:setLevel("DEBUG")
-print("Debug logging enabled - check console output")
-#+end_src
-
-** Enable Debug Logging
-
-For detailed diagnostics:
-#+begin_src lua
-wd.logger:setLevel("DEBUG")
--- Then check: Hammerspoon menu → Console
--- Look for [DEBUG], [ASYNC], and [DEBUG BACKEND] messages
-#+end_src
-
-** Debugging Recording Backends
-
-*** Check if Files are Being Created
-
-From Hammerspoon console:
-#+begin_src lua
--- List recent recordings
-hs.execute("ls -lht /tmp/whisper_dict/*.wav | head -5")
-
--- Check file sizes (should be >100KB for real audio)
-hs.execute("ls -lh /tmp/whisper_dict/*.wav | tail -3")
-#+end_src
-
-From terminal:
 #+begin_src bash
-# List all recordings with sizes
-ls -lht /tmp/whisper_dict/*.wav | head -10
+# Check if port is in use
+lsof -i :12341
 
-# For Python stream backend, check chunk files
-ls -lht /tmp/whisper_dict/*_chunk_*.wav
+# Kill zombie process if needed
+lsof -ti:12341 | xargs kill -9
+
+# Check Python dependencies
+pip list | grep -E "sounddevice|torch|scipy"
 #+end_src
 
-*** Verify Audio Content
+** "Whisper command not found"
 
-*Play most recent recording:*
+*Fix:*
+
+#+begin_src bash
+# For WhisperKit
+brew install whisperkit-cli
+
+# For Whisper CLI
+brew install whisper-cli
+
+# For sox
+brew install sox
+#+end_src
+
+** Check what's happening
+
 #+begin_src lua
--- From Hammerspoon console
+-- In Hammerspoon console (Cmd+Opt+Ctrl+C)
+
+-- Check current status
+print(hs.inspect(wd:getStatus()))
+
+-- List recent recordings
+print(hs.execute("ls -lht /tmp/whisper_dict/*.wav | head -5"))
+
+-- Play most recent
 latest = hs.execute("ls -t /tmp/whisper_dict/*.wav | head -1"):gsub("\n", "")
 hs.execute("afplay " .. latest)
 #+end_src
 
-#+begin_src bash
-# From terminal - play most recent
-afplay $(ls -t /tmp/whisper_dict/*.wav | head -1)
+* Advanced: Custom Callback
 
-# Play specific recording
-afplay /tmp/whisper_dict/en-20240101-120000.wav
-#+end_src
+Instead of clipboard, do whatever you want with the text:
 
-*Check audio properties:*
-#+begin_src bash
-# Check duration and format
-afinfo /tmp/whisper_dict/en-20240101-120000.wav
-
-# Expected output should show:
-# - Duration: >0 seconds
-# - Sample Rate: 16000 Hz (for pythonstream) or 44100 Hz (for sox)
-# - Channels: 1 (mono)
-#+end_src
-
-*** Verify Python Stream Server Status
-
-*Check if server is running:*
 #+begin_src lua
--- From Hammerspoon console
-hs.execute("lsof -i :12341")  -- Should show python process
+wd:toggleTranscribe(function(text)
+  -- Your custom code here
+  print("You said: " .. text)
+
+  -- Examples:
+  -- Send to app
+  hs.urlevent.openURL("myapp://text?content=" .. hs.http.encodeForQuery(text))
+
+  -- Save to file
+  local f = io.open("/tmp/dictation.txt", "a")
+  f:write(text .. "\n")
+  f:close()
+
+  -- Post to webhook
+  hs.http.doRequest("https://myserver.com/api", "POST", text)
+end)
 #+end_src
 
-#+begin_src bash
-# From terminal
-lsof -i :12341  # Check if port is listening
-ps aux | grep whisper_stream.py  # Check if process exists
-#+end_src
+* Recommended Configurations
 
-*Server startup debugging:*
+** Best for Beginners
+
 #+begin_src lua
--- Enable async startup debug messages (already in code)
--- Check Hammerspoon console for:
--- [ASYNC] Server startup callback executing...
--- [ASYNC] Calling backend:startServer()...
--- [ASYNC] startServer returned: true
--- Python stream server ready
+wd.transcriptionMethod = "groq"
+wd.groqApiKey = "your-key"
+wd.recordingBackend = "sox"
 #+end_src
 
-*** Check Backend Configuration
+** Best for Privacy
 
-From Hammerspoon console:
 #+begin_src lua
--- Check which backend is active
-print("Recording backend:", wd.recordingBackend)
-
--- Check if pythonstream server is running
-if wd.recordingBackend == "pythonstream" then
-  backend = wd.recordingBackends.pythonstream
-  print("Server running:", backend:isServerRunning())
-  print("Config:", hs.inspect(backend.config))
-end
-
--- List recording directory contents
-print(hs.execute("ls -lh /tmp/whisper_dict/ | tail -10"))
+wd.transcriptionMethod = "whisperkit"  -- Apple Silicon only
+wd.recordingBackend = "sox"
 #+end_src
 
-** Common Issues
+** Best for Speed (Privacy Trade-off)
 
-*** "recording command not found"
-- Check sox: =which sox=
-- Install: =brew install sox=
+#+begin_src lua
+wd.transcriptionMethod = "groq"
+wd.recordingBackend = "pythonstream"
+#+end_src
 
-*** "transcription method not found"
-- Check backend: =which whisperkit-cli= or =which whisper-cli=
-- See Requirements section for installation
+** Best for Heavy Users (Local, Fast)
 
-*** Empty or Silent Recordings
+#+begin_src lua
+wd.transcriptionMethod = "whisperserver"
+wd.recordingBackend = "pythonstream"
+#+end_src
 
-*File exists but transcription is empty:*
+* Getting Help
 
-1. **Play the recording to verify it contains audio**:
-   #+begin_src bash
-   afplay /tmp/whisper_dict/your-file.wav
-   #+end_src
+1. Check this README
+2. Check [[file:docs/TROUBLESHOOTING.md][Common Issues]]
+3. Enable debug mode: =wd.logger:setLevel("DEBUG")= then check Hammerspoon Console
+4. Open an issue with:
+   - Your configuration
+   - Output of =wd:getStatus()=
+   - Relevant console logs
 
-2. **Check file size** (should be >100KB):
-   #+begin_src bash
-   ls -lh /tmp/whisper_dict/*.wav
-   #+end_src
+* Privacy & Security
 
-3. **Check audio properties**:
-   #+begin_src bash
-   afinfo /tmp/whisper_dict/your-file.wav | grep duration
-   # Should show: estimated duration: X.XXX sec
-   #+end_src
+*What stays on your Mac:*
+- All configurations
+- All recordings (in =/tmp/whisper_dict/=)
+- When using local methods (whisperkit, whispercli, whisperserver)
 
-4. **If file is silent**:
-   - Check microphone: System Settings → Sound → Input
-   - Verify input level moves when speaking
-   - Try =sox= backend to isolate issue: =wd.recordingBackend = "sox"=
+*What leaves your Mac:*
+- Audio files when using Groq (sent to Groq's servers)
+- Nothing else - no telemetry, no tracking
 
-*** Python Stream Backend Issues
-
-*Port conflict (12341 in use):*
-
-If you see: =⚠️ Port 12341 in use!=
-
-1. **Check what's using the port**:
-   #+begin_src bash
-   lsof -i :12341
-   #+end_src
-
-2. **Kill the process** (if it's a zombie):
-   #+begin_src bash
-   lsof -ti:12341 | xargs kill -9
-   #+end_src
-
-3. **Or change the port** in your config:
-   #+begin_src lua
-   wd.recordingBackends.pythonstream.config.port = 50341  -- Use different port
-   #+end_src
-
-*Server won't start:*
-- Check Python dependencies: =pip list | grep -E "sounddevice|scipy|torch"=
-- Check port not in use: =lsof -i :12341=
-- See port conflict section above
-
-*Server starts but no recording:*
-- Check [ASYNC] messages in console
-- Verify server sends =recording_started= event
-- Enable debug logging: =wd.logger:setLevel("DEBUG")=
-
-*First words cut off:*
-- Should be fixed (recording_started sent after stream ready)
-- If still happening, check console for timing of "Ready to record" alert
-
-*** Microphone Not Working
-
-The Python stream backend uses your **system default input device**. Ensure the correct microphone is selected.
-
-1. **Check System Settings**:
-   - System Settings → Sound → Input
-   - Verify correct microphone selected (this is what Python stream will use)
-   - Speak and watch input level meter
-
-2. **Test with sox directly**:
-   #+begin_src bash
-   sox -d test.wav
-   # Speak for a few seconds, then Ctrl+C
-   afplay test.wav  # Should hear your recording
-   #+end_src
-
-3. **Check which device Python sees**:
-   #+begin_src bash
-   python3 -c "import sounddevice as sd; print(sd.query_devices())"
-   # Look for '>' marking the default input device
-   #+end_src
-
-4. **Grant microphone permissions**:
-   - System Settings → Privacy & Security → Microphone
-   - Ensure Hammerspoon has permission
-
-* Development
-
-For architecture, extending with custom methods, and contributing, see [[file:development.org][development.org]].
+*To maximize privacy:*
+- Use =whisperkit= or =whispercli= transcription method
+- Use =sox= or =pythonstream= recording backend
+- Audio stays 100% local
 
 * License
 
-MIT License - See LICENSE file for details.
+MIT License - See LICENSE file
 
-* See Also
+* For Developers
 
-- [[https://www.hammerspoon.org/][Hammerspoon Documentation]]
-- [[https://github.com/argmaxinc/whisperkit-cli][WhisperKit CLI Repository]]
-- [[https://github.com/ggerganov/whisper.cpp][whisper.cpp Repository]]
+- [[file:docs/ARCHITECTURE.md][Architecture Documentation]]
+- [[file:docs/API.md][API Documentation]]
+- [[file:docs/TESTING.md][Testing Guide]]
+- [[file:docs/CONTRIBUTING.md][Contributing]]

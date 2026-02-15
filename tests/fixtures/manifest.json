@@ -1,0 +1,23 @@
+{
+  "audio": {
+    "chunks": {
+      "short": {
+        "file": "audio/chunks/chunk_short.wav",
+        "description": "Short audio chunk (~1 second)",
+        "size_kb": 252
+      },
+      "medium": {
+        "file": "audio/chunks/chunk_medium.wav",
+        "description": "Medium audio chunk (~3 seconds)",
+        "size_kb": 144
+      },
+      "long": {
+        "file": "audio/chunks/chunk_long.wav",
+        "description": "Long audio chunk (~5+ seconds)",
+        "size_kb": 96
+      }
+    }
+  },
+  "generated": "2026-02-15T05:49:47Z",
+  "source": "/tmp/whisper_dict"
+}

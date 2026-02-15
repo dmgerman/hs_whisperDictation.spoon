@@ -1,0 +1,2 @@
+Yes, we still keep the maximum recording time.
+I believe that we currently have a constant for that.

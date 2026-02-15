@@ -19,7 +19,7 @@ from pathlib import Path
 # === Configuration Constants ===
 SILENCE_AMPLITUDE_THRESHOLD = 0.01
 PERFECT_SILENCE_DURATION_AT_START = 2.0  # Detect mic off at recording start
-VAD_SPEECH_THRESHOLD = 0.5
+VAD_SPEECH_THRESHOLD = 0.25  # Lower threshold = more aggressive speech detection
 VAD_WINDOW_SECONDS = 0.5
 
 

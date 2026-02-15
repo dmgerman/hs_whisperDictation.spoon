@@ -255,6 +255,14 @@ RecordingBackends.pythonstream = {
       function(exitCode, stdOut, stdErr)
         -- Exit callback (cleanup only)
         print(string.format("[DEBUG BACKEND] Server process exited: exitCode=%d", exitCode))
+        if exitCode ~= 0 then
+          local errorMsg = string.format("❌ Python server crashed (exit %d)", exitCode)
+          if stdErr and #stdErr > 0 then
+            print("[WhisperDictation] Server stderr: " .. stdErr)
+            errorMsg = errorMsg .. ":\n" .. stdErr:sub(1, 200)
+          end
+          hs.alert.show(errorMsg, 15.0)
+        end
         if stdErr and #stdErr > 0 then
           print("[WhisperDictation] Server stderr: " .. stdErr)
         end
