@@ -1,27 +1,32 @@
 --- === WhisperDictation ===
 ---
 --- Toggle local Whisper-based dictation with menubar indicator.
---- Records from mic via `sox`, transcribes via multiple backends, copies text to clipboard.
+--- Records from mic, transcribes via multiple backends, shows chunks in real-time.
 ---
 --- Features:
---- • Dynamic filename with timestamp
---- • Elapsed time indicator in menubar during recording
---- • Multiple languages (--language option or server restart)
---- • Clipboard copy and character count summary
+--- • Multiple recording backends: sox (simple), python-stream (continuous with Silero VAD)
+--- • Continuous recording with auto-chunking (VAD-based silence detection)
+--- • Real-time chunk display with hs.alert
 --- • Multiple transcription backends: whisperkit-cli, whisper-cli, whisper-server
---- • Optional activity monitoring: tracks keyboard/mouse/app switches during recording
---- • Auto-paste mode: pastes text if no activity detected and same app is focused
+--- • Chunk-by-chunk transcription with ordered display
+--- • Final concatenation to clipboard with chunk count summary
+--- • Multiple languages support
+--- • Optional activity monitoring
+--- • Microphone off detection (perfect silence warning)
 ---
 --- Usage:
 -- wd = hs.loadSpoon("hs_whisperDictation")
 -- wd.languages = {"en", "ja", "es", "fr"}
--- wd.monitorUserActivity = true  -- Enable activity monitoring (optional)
+-- wd.recordingBackend = "pythonstream"  -- or "sox" for simple recording
+-- wd.transcriptionMethod = "whisperkitcli"  -- or "whispercli", "whisperserver"
 -- wd:bindHotKeys({
---    toggle = {dmg_all_keys, "l"},           -- Copy to clipboard only
---    togglePaste = {dmg_all_keys, "p"},      -- Auto-paste if no activity detected
+--    toggle = {dmg_all_keys, "l"},
 --    nextLang = {dmg_all_keys, ";"},
 -- })
 -- wd:start()
+--
+-- Python stream backend requirements:
+--   pip install sounddevice scipy torch
 --
 -- Requirements:
 --      see readme.org
@@ -33,6 +38,10 @@ obj.name = "WhisperDictation"
 obj.version = "1.0"
 obj.author = "dmg"
 obj.license = "MIT"
+
+-- Load recording backends
+local spoonPath = debug.getinfo(1, "S").source:sub(2):match("(.*/)")
+local RecordingBackends = dofile(spoonPath .. "recording-backend.lua")
 
 -- === Icons ===
 obj.icons = {
@@ -258,6 +267,11 @@ obj.transcriptionMethods = {
 -- Select active transcription method (default to whispercli)
 obj.transcriptionMethod = "whispercli"
 
+-- === Recording Backend Configuration ===
+obj.recordingBackend = "pythonstream"  -- "sox" or "pythonstream"
+obj.recordingBackends = RecordingBackends
+obj.chunkAlertDuration = 5.0  -- Duration to show chunk alerts (seconds)
+
 -- === Logger ===
 local Logger = {}
 Logger.__index = Logger
@@ -367,6 +381,15 @@ obj.activityCounts = {keys = 0, clicks = 0, appSwitches = 0}
 obj.startingApp = nil
 obj.shouldPaste = false
 
+-- Chunk tracking state (for continuous recording backends)
+obj.recordingStartTime = nil        -- Total recording start time
+obj.currentChunkStartTime = nil     -- Current chunk start time
+obj.chunkCount = 0                  -- Total chunks received
+obj.pendingChunks = {}              -- [chunkNum] = true while transcribing
+obj.completedChunks = {}            -- [chunkNum] = text when done
+obj.allChunksText = {}              -- Ordered array of all chunk texts for final concatenation
+obj.recordingBackendFallback = false  -- Track if we fell back to sox
+
 -- === Helpers ===
 local function ensureDir(path)
   hs.fs.mkdir(path)
@@ -425,8 +448,19 @@ end
 
 local function updateElapsed()
   if obj.startTime then
-    local elapsed = os.difftime(os.time(), obj.startTime)
-    updateMenu(string.format(obj.icons.recording .. " %ds (%s)", elapsed, currentLang()), "Recording...")
+    local totalElapsed = os.difftime(os.time(), obj.startTime)
+
+    -- Only show chunk info if using continuous backend (not sox)
+    if obj.recordingBackend ~= "sox" and obj.chunkCount > 0 then
+      local chunkElapsed = obj.currentChunkStartTime and os.difftime(os.time(), obj.currentChunkStartTime) or 0
+      updateMenu(
+        string.format(obj.icons.recording .. " Chunk %d (%ds/%ds) (%s)",
+                     obj.chunkCount + 1, chunkElapsed, totalElapsed, currentLang()),
+        "Recording..."
+      )
+    else
+      updateMenu(string.format(obj.icons.recording .. " %ds (%s)", totalElapsed, currentLang()), "Recording...")
+    end
   end
 end
 
@@ -604,7 +638,16 @@ local function startRecordingSession()
   if obj.timeoutSeconds and obj.timeoutSeconds > 0 then
     if obj.timeoutTimer then obj.timeoutTimer:stop() end
     obj.timeoutTimer = hs.timer.doAfter(obj.timeoutSeconds, function()
-      if obj.recTask then
+      -- Check if any backend is still recording
+      local isRecording = false
+      for _, backend in pairs(obj.recordingBackends) do
+        if backend:isRecording() then
+          isRecording = true
+          break
+        end
+      end
+
+      if isRecording then
         obj.logger:warn(obj.icons.stopped .. " Recording auto-stopped due to timeout (" .. obj.timeoutSeconds .. "s)", true)
         obj:toggleTranscribe()
       end
@@ -623,12 +666,7 @@ local function startRecordingSession()
 end
 
 local function stopRecordingSession()
-  -- Terminate recording task
-  if obj.recTask then
-    obj.logger:info(obj.icons.stopped .. " Recording stopped")
-    obj.recTask:terminate()
-    obj.recTask = nil
-  end
+  obj.logger:info(obj.icons.stopped .. " Recording stopped")
 
   -- Stop elapsed time display timer
   if obj.timer then
@@ -1017,71 +1055,356 @@ local function showRetranscribeChooser(callback)
   chooser:show()
 end
 
+-- === Recording Backend Event Handling ===
+
+-- Helper functions (called by transcription callbacks)
+local function concatenateChunks()
+  local parts = {}
+  for i = 1, obj.chunkCount do
+    local text = obj.allChunksText[i]
+    if text then
+      table.insert(parts, text)
+    end
+  end
+  return table.concat(parts, "\n\n")
+end
+
+local function hasPendingChunks()
+  for _, _ in pairs(obj.pendingChunks) do
+    return true
+  end
+  return false
+end
+
+local function isStillRecording()
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  return backend and backend:isRecording()
+end
+
+--- Finalize transcription - concatenate all chunks and copy to clipboard.
+local function finalizeTranscription()
+  print(string.format("[DEBUG] finalizeTranscription: chunkCount=%d", obj.chunkCount))
+  local fullText = concatenateChunks()
+  local charCount = #fullText
+  print(string.format("[DEBUG] Concatenated text length: %d", charCount))
+
+  local ok, err = pcall(hs.pasteboard.setContents, fullText)
+  if not ok then
+    obj.logger:error("Failed to copy to clipboard: " .. tostring(err), true)
+    return
+  end
+  print("[DEBUG] Text copied to clipboard successfully")
+
+  -- Show different message for single vs multiple chunks
+  local message
+  if obj.chunkCount == 1 then
+    message = string.format("Transcription complete: %d characters", charCount)
+  else
+    message = string.format("Transcription complete: %d chunks, %d characters", obj.chunkCount, charCount)
+  end
+
+  -- Handle auto-paste if enabled
+  if obj.shouldPaste then
+    local c = obj.activityCounts
+    local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
+
+    if obj.monitorUserActivity and hasActivity then
+      -- Activity detected - warn and skip paste
+      local summary = getActivitySummary()
+      obj.logger:warn(
+        "⚠️  User activity detected during recording (" .. summary .. ") - text copied to clipboard (not pasted)",
+        true
+      )
+    elseif obj.monitorUserActivity and not isSameAppFocused() then
+      -- Different app focused - skip paste
+      obj.logger:warn(
+        "⚠️  Application changed during recording - text copied to clipboard (not pasted)",
+        true
+      )
+    else
+      -- Auto-paste after delay
+      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars) - pasting...", true)
+      hs.timer.doAfter(obj.autoPasteDelay, function()
+        hs.eventtap.keyStroke({"cmd"}, "v")
+      end)
+    end
+    obj.shouldPaste = false
+  end
+
+  print(string.format("[DEBUG] Showing completion alert: %s", message))
+  hs.alert.show(message, 5.0)
+  obj.logger:info(message)
+  resetMenuToIdle()
+end
+
+--- Check if all pending transcriptions are complete and finalize if done.
+local function checkIfTranscriptionComplete()
+  local stillRecording = isStillRecording()
+  local pending = hasPendingChunks()
+  print(string.format("[DEBUG] checkIfTranscriptionComplete: stillRecording=%s, hasPending=%s", tostring(stillRecording), tostring(pending)))
+
+  if stillRecording then
+    print("[DEBUG] Still recording, not finalizing")
+    return
+  end
+
+  if not pending then
+    print("[DEBUG] No pending chunks, calling finalizeTranscription")
+    finalizeTranscription()
+  else
+    print("[DEBUG] Still have pending chunks, waiting")
+  end
+end
+
+--- Save completed chunks to clipboard in case of error.
+local function saveCompletedChunks()
+  if obj.chunkCount == 0 then
+    return
+  end
+
+  local fullText = concatenateChunks()
+  if #fullText > 0 then
+    local ok, err = pcall(hs.pasteboard.setContents, fullText)
+    if ok then
+      local chunkCount = 0
+      for i = 1, obj.chunkCount do
+        if obj.allChunksText[i] then
+          chunkCount = chunkCount + 1
+        end
+      end
+      obj.logger:info(string.format("Saved %d completed chunks to clipboard", chunkCount), true)
+    end
+  end
+end
+
+-- Transcription handlers
+local function handleChunkTranscriptionSuccess(chunkNum, text)
+  print(string.format("[DEBUG] handleChunkTranscriptionSuccess: chunk=%d, length=%d", chunkNum, #text))
+  obj.completedChunks[chunkNum] = text
+  obj.allChunksText[chunkNum] = text
+
+  -- Only show chunk number if using continuous backend (not sox)
+  if obj.recordingBackend ~= "sox" then
+    print(string.format("[DEBUG] Showing chunk alert for chunk %d", chunkNum))
+    hs.alert.show(string.format("Chunk %d: %s", chunkNum, text), obj.chunkAlertDuration)
+  end
+  obj.logger:info(string.format("Chunk %d transcribed (%d chars)", chunkNum, #text))
+
+  print(string.format("[DEBUG] Calling checkIfTranscriptionComplete"))
+  checkIfTranscriptionComplete()
+end
+
+local function handleChunkTranscriptionFailure(chunkNum, error)
+  print(string.format("[DEBUG] handleChunkTranscriptionFailure: chunk=%d, error=%s", chunkNum, error))
+  obj.logger:error(string.format("Chunk %d transcription failed: %s", chunkNum, error), true)
+  checkIfTranscriptionComplete()
+end
+
+--- Transcribe a single chunk.
+-- @param chunkNum (number): Chunk sequence number
+-- @param audioFile (string): Path to audio file
+-- @param isFinal (boolean): Whether this is the final chunk
+local function transcribeChunk(chunkNum, audioFile, isFinal)
+  print(string.format("[DEBUG] transcribeChunk: chunk=%d, file=%s", chunkNum, audioFile))
+  local method = obj.transcriptionMethods[obj.transcriptionMethod]
+  if not method then
+    obj.logger:error("Unknown transcription method: " .. obj.transcriptionMethod, true)
+    obj.pendingChunks[chunkNum] = nil
+    return
+  end
+
+  print(string.format("[DEBUG] Starting transcription with %s", method.displayName))
+  obj.logger:debug(string.format("Transcribing chunk %d with %s", chunkNum, method.displayName))
+
+  method:transcribe(audioFile, currentLang(), function(success, textOrError)
+    print(string.format("[DEBUG] Transcription callback: chunk=%d, success=%s", chunkNum, tostring(success)))
+    obj.pendingChunks[chunkNum] = nil
+
+    if success then
+      handleChunkTranscriptionSuccess(chunkNum, textOrError)
+    else
+      handleChunkTranscriptionFailure(chunkNum, textOrError)
+    end
+  end)
+end
+
+local function handleChunkReady(event)
+  local chunkNum = event.chunk_num or event.chunkNum or 1
+  local audioFile = event.audio_file or event.audioFile
+  local isFinal = event.is_final or event.isFinal or false
+
+  print(string.format("[DEBUG] handleChunkReady: chunk=%d, file=%s, final=%s", chunkNum, audioFile, tostring(isFinal)))
+  obj.logger:info(string.format("Chunk %d ready: %s%s", chunkNum, audioFile, isFinal and " (final)" or ""))
+
+  -- Show alert that chunk is being saved and transcribed
+  hs.alert.show(string.format("Chunk %d recorded, transcribing...", chunkNum), 2.0)
+
+  -- Update chunk count and start time for next chunk
+  if chunkNum > obj.chunkCount then
+    obj.chunkCount = chunkNum
+    obj.currentChunkStartTime = os.time()
+    print(string.format("[DEBUG] Updated chunkCount to %d", obj.chunkCount))
+  end
+
+  -- Mark chunk as pending and transcribe
+  obj.pendingChunks[chunkNum] = true
+  print(string.format("[DEBUG] Marked chunk %d as pending, calling transcribeChunk", chunkNum))
+  transcribeChunk(chunkNum, audioFile, isFinal)
+end
+
+local function handleRecordingError(event)
+  local errorMsg = event.error or "Unknown error from recording backend"
+  obj.logger:error("Recording error: " .. errorMsg, true)
+
+  -- Stop recording immediately
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  if backend and backend:isRecording() then
+    pcall(function() backend:stopRecording() end)
+  end
+  stopRecordingSession()
+
+  -- Save completed chunks if we have any (mid-recording error)
+  local hasCompletedChunks = false
+  for _, text in pairs(obj.completedChunks) do
+    if text then
+      hasCompletedChunks = true
+      break
+    end
+  end
+
+  if hasCompletedChunks then
+    saveCompletedChunks()
+  end
+
+  resetMenuToIdle()
+end
+
+local function handleSilenceWarning(event)
+  local message = event.message or "Perfect silence detected - microphone may be off"
+  obj.logger:warn("⚠️  " .. message, true)
+end
+
+--- Handle events from recording backend.
+-- @param event (table): Event from recording backend
+local function handleRecordingEvent(event)
+  local eventType = event.type
+  print(string.format("[DEBUG LUA] handleRecordingEvent: type=%s", tostring(eventType)))
+
+  if eventType == "recording_started" then
+    print("[DEBUG LUA] Recording started event")
+    obj.logger:debug("Recording backend started")
+  elseif eventType == "chunk_ready" then
+    print("[DEBUG LUA] Chunk ready event, calling handleChunkReady")
+    handleChunkReady(event)
+  elseif eventType == "recording_stopped" then
+    print("[DEBUG LUA] Recording stopped event")
+    obj.logger:info("Recording backend stopped")
+  elseif eventType == "silence_warning" then
+    print("[DEBUG LUA] Silence warning event")
+    handleSilenceWarning(event)
+  elseif eventType == "error" then
+    print(string.format("[DEBUG LUA] Error event: %s", event.error or "unknown"))
+    handleRecordingError(event)
+  elseif eventType == "debug" then
+    print(string.format("[DEBUG PYTHON] %s", event.message or ""))
+  else
+    print(string.format("[DEBUG LUA] Unknown event type: %s", tostring(eventType)))
+    obj.logger:warn("Unknown event type from recording backend: " .. tostring(eventType))
+  end
+end
+
 -- === Public API ===
+
+local function parseCallbackOrPaste(callbackOrPaste)
+  if type(callbackOrPaste) == "function" then
+    obj.transcriptionCallback = callbackOrPaste
+    obj.shouldPaste = false
+  elseif type(callbackOrPaste) == "boolean" then
+    obj.transcriptionCallback = nil
+    obj.shouldPaste = callbackOrPaste
+  else
+    obj.transcriptionCallback = nil
+    obj.shouldPaste = false
+  end
+end
+
+local function resetChunkState()
+  obj.recordingStartTime = os.time()
+  obj.currentChunkStartTime = os.time()
+  obj.chunkCount = 0
+  obj.pendingChunks = {}
+  obj.completedChunks = {}
+  obj.allChunksText = {}
+  obj.recordingBackendFallback = false
+end
+
+local function tryStartRecording(backend)
+  return backend:startRecording(
+    obj.tempDir,
+    currentLang(),
+    currentLang(),
+    handleRecordingEvent
+  )
+end
 
 --- Begin transcription with optional callback or auto-paste flag.
 -- @param callbackOrPaste (function|boolean|nil): If function, uses callback. If true, enables auto-paste. If nil/false, clipboard only.
 -- @return self
 function obj:beginTranscribe(callbackOrPaste)
-  if self.recTask ~= nil then
+  local backend = self.recordingBackends[self.recordingBackend]
+  if not backend then
+    self.logger:error("Unknown recording backend: " .. self.recordingBackend, true)
+    return self
+  end
+
+  if backend:isRecording() then
     self.logger:warn("Recording already in progress", true)
     return self
   end
 
-  -- Parse parameter: boolean vs callback
-  if type(callbackOrPaste) == "function" then
-    self.transcriptionCallback = callbackOrPaste
-    self.shouldPaste = false
-  elseif type(callbackOrPaste) == "boolean" then
-    self.transcriptionCallback = nil
-    self.shouldPaste = callbackOrPaste
-  else
-    self.transcriptionCallback = nil
-    self.shouldPaste = false
-  end
-
+  parseCallbackOrPaste(callbackOrPaste)
+  resetChunkState()
   ensureDir(self.tempDir)
-  local audioFile = timestampedFile(self.tempDir, currentLang(), "wav")
-  self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ") - " .. audioFile, true)
-  self.logger:info("Running: " .. self.recordCmd .. "-q -d " .. audioFile)
-  self.recTask = hs.task.new(self.recordCmd, nil, {"-q", "-d", audioFile})
 
-  if not self.recTask then
-    self.logger:error("Failed to create recording task", true)
-    resetMenuToIdle()
-    return self
-  end
+  local success, err = tryStartRecording(backend)
 
-  local ok, err = pcall(function() self.recTask:start() end)
-  if not ok then
+  if not success then
     self.logger:error("Failed to start recording: " .. tostring(err), true)
-    self.recTask = nil
     resetMenuToIdle()
     return self
   end
 
-  self.currentAudioFile = audioFile
+  self.logger:info(self.icons.recording .. " Recording started with " .. backend.displayName .. " (" .. currentLang() .. ")", true)
   startRecordingSession()
   return self
 end
 
 function obj:endTranscribe()
-  if self.recTask == nil then
+  -- Get active recording backend (may be fallback)
+  local backend = self.recordingBackends[self.recordingBackendFallback and "sox" or self.recordingBackend]
+  if not backend then
+    self.logger:error("Unknown recording backend", true)
+    return self
+  end
+
+  -- Check if recording
+  if not backend:isRecording() then
     self.logger:warn("No recording in progress", true)
     return self
   end
 
-  stopRecordingSession()
-  if self.currentAudioFile then
-    if not hs.fs.attributes(self.currentAudioFile) then
-      self.logger:error("Recording file was not created: " .. self.currentAudioFile, true)
-      self.currentAudioFile = nil
-      return self
-    end
-    self.logger:info("Processing audio file: " .. self.currentAudioFile)
-    transcribe(self.currentAudioFile)
-    self.currentAudioFile = nil
+  -- Stop recording backend
+  local success, err = backend:stopRecording()
+  if not success then
+    self.logger:error("Failed to stop recording: " .. tostring(err), true)
   end
+
+  -- Stop recording session UI
+  stopRecordingSession()
+
+  -- Note: Chunks will be transcribed via handleRecordingEvent callbacks
+  -- Final concatenation happens in checkIfTranscriptionComplete()
+
   return self
 end
 
@@ -1089,7 +1412,16 @@ end
 -- @param callbackOrPaste (function|boolean|nil): If function, uses callback. If true, enables auto-paste. If nil/false, clipboard only.
 -- @return self
 function obj:toggleTranscribe(callbackOrPaste)
-  if self.recTask == nil then
+  -- Check if any backend is currently recording
+  local isRecording = false
+  for _, backend in pairs(self.recordingBackends) do
+    if backend:isRecording() then
+      isRecording = true
+      break
+    end
+  end
+
+  if not isRecording then
     self:beginTranscribe(callbackOrPaste)
   else
     self:endTranscribe()
@@ -1109,10 +1441,32 @@ function obj:start()
   obj.logger:info("Starting WhisperDictation")
   local errorSuffix = " WhisperDictation not started"
 
-  -- Validate recording command
-  if not hs.fs.attributes(obj.recordCmd) then
-    obj.logger:error("recording command not found: " .. obj.recordCmd .. errorSuffix, true)
+  -- Set up Python stream backend script path
+  obj.recordingBackends.pythonstream.config.scriptPath = spoonPath .. "whisper_stream.py"
+
+  -- Validate recording backend
+  local backend = obj.recordingBackends[obj.recordingBackend]
+  if not backend then
+    obj.logger:error("Unknown recording backend: " .. obj.recordingBackend .. errorSuffix, true)
     return
+  end
+
+  local backendValid, backendErr = backend:validate()
+  if not backendValid then
+    -- Recording backend validation failed
+    obj.logger:warn("⚠️  " .. backend.displayName .. " validation failed: " .. tostring(backendErr))
+
+    -- If not sox, try to fall back to sox
+    if obj.recordingBackend ~= "sox" then
+      obj.logger:warn("⚠️  Will attempt to use Sox as fallback when recording starts")
+      -- Don't fail startup - we'll try fallback when recording starts
+    else
+      -- Sox itself failed - can't proceed
+      obj.logger:error("Sox validation failed: " .. tostring(backendErr) .. errorSuffix, true)
+      return
+    end
+  else
+    obj.logger:info("Recording backend: " .. backend.displayName)
   end
 
   -- Validate transcription method
