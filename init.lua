@@ -1603,13 +1603,19 @@ function obj:start()
         local started, startErr = backend:startServer(obj.tempDir, currentLang())
         obj.logger:info("[ASYNC] startServer returned: " .. tostring(started))
         if not started then
-          obj.logger:warn("Python stream server not started: " .. tostring(startErr) .. " (will start on first recording)")
+          local errorMsg = tostring(startErr)
+          obj.logger:warn("Python stream server not started: " .. errorMsg .. " (will start on first recording)")
+          -- Show alert for port conflicts (user needs to know immediately)
+          if errorMsg:match("Port.*in use") or errorMsg:match("already in use") then
+            hs.alert.show("⚠️ Python stream server: " .. errorMsg, 5)
+          end
         else
           obj.logger:info("Python stream server ready")
         end
       end)
       if not ok then
         obj.logger:error("Python stream server async startup failed: " .. tostring(err))
+        hs.alert.show("⚠️ Python stream server failed\nSee console for details", 3)
       end
       obj.logger:info("[ASYNC] Server startup callback complete")
     end)

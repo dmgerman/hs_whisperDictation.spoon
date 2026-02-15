@@ -24,14 +24,67 @@ Using the Python stream backend with persistent server:
 - Smart auto-paste with activity monitoring
 - Asynchronous processing
 - Configurable recording timeout
-- Multiple transcription backends
+- Multiple recording backends (simple vs continuous with VAD)
+- Multiple transcription backends (CLI, HTTP server)
 
 * Requirements
 
-** sox (required)
+** Recording Backend (choose one)
+
+The recording backend captures audio from your microphone. Two backends are available:
+
+*** Sox Backend (Simple)
+
+Simple one-shot recording. Required even if using Python Stream as fallback.
 
 #+begin_src bash
 brew install sox
+#+end_src
+
+*Features:*
+- Single WAV file per recording
+- No chunking or real-time processing
+- Simple and reliable
+- Default fallback if Python Stream unavailable
+
+*Configuration:*
+#+begin_src lua
+wd.recordingBackend = "sox"  -- Simple recording (default fallback)
+#+end_src
+
+*** Python Stream Backend (Recommended)
+
+Advanced continuous recording with Silero VAD for intelligent chunking.
+
+#+begin_src bash
+# Install Python dependencies
+pip install sounddevice scipy torch
+#+end_src
+
+*Features:*
+- **Persistent server**: Starts once, stays running (instant subsequent recordings)
+- **Silero VAD**: Automatic chunk detection based on silence (2s threshold)
+- **Real-time transcription**: Chunks transcribed as they arrive
+- **Smart chunking**: Min 3s, max 10 minutes, silence-based splits
+- **Microphone detection**: Auto-stops if mic is off (perfect silence detection)
+- **Uses system default microphone**: Set in System Settings → Sound → Input
+
+*Performance:*
+- First recording after reload: ~2-3s (one-time VAD model loading)
+- All subsequent recordings: **Instant** (server stays warm)
+
+*Configuration:*
+#+begin_src lua
+wd.recordingBackend = "pythonstream"  -- Continuous recording with VAD
+
+wd.pythonstreamConfig = {
+  port = 12341,                  -- TCP server port
+  host = "127.0.0.1",
+  serverStartupTimeout = 5.0,
+  silenceThreshold = 2.0,        -- Seconds of silence to trigger chunk
+  minChunkDuration = 3.0,       -- Minimum chunk length
+  maxChunkDuration = 600.0,      -- Maximum chunk length
+}
 #+end_src
 
 ** Transcription Backend (choose one)
@@ -102,6 +155,20 @@ wd:start()
 
 ** Backend Configuration
 
+*** Recording Backend
+
+*Python Stream (Recommended):*
+#+begin_src lua
+wd.recordingBackend = "pythonstream"  -- Persistent server with VAD
+#+end_src
+
+*Sox (Simple):*
+#+begin_src lua
+wd.recordingBackend = "sox"  -- One-shot recording
+#+end_src
+
+*** Transcription Backend
+
 *WhisperKit CLI:*
 #+begin_src lua
 wd.transcriptionMethod = "whisperkitcli"
@@ -119,6 +186,18 @@ wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-l
 wd.transcriptionMethod = "whisperserver"
 wd.serverConfig.executable = "/path/to/whisper-server"
 wd.serverConfig.modelPath = "/usr/local/whisper/ggml-large-v3-turbo.bin"
+#+end_src
+
+*** Recommended Combination
+
+For best performance (instant recording start, persistent servers):
+
+#+begin_src lua
+wd = hs.loadSpoon("hs_whisperDictation")
+wd.recordingBackend = "pythonstream"      -- Persistent recording server
+wd.transcriptionMethod = "whisperserver"  -- Persistent transcription server
+wd.languages = {"en", "ja"}
+wd:start()
 #+end_src
 
 * Auto-Paste Feature
@@ -345,31 +424,231 @@ wd.logger:setLevel("DEBUG")  -- DEBUG/INFO/WARN/ERROR
 
 * Troubleshooting
 
-** Enable Debug Logging
+** Quick Debugging Commands
+
+Copy-paste these into Hammerspoon Console (⌘⌥⌃C) for instant diagnostics:
 
 #+begin_src lua
+-- 1. Check recording backend status
+print("Backend:", wd.recordingBackend)
+if wd.recordingBackend == "pythonstream" then
+  print("Server running:", wd.recordingBackends.pythonstream:isServerRunning())
+end
+
+-- 2. List recent recordings with sizes
+print(hs.execute("ls -lht /tmp/whisper_dict/*.wav 2>/dev/null | head -5"))
+
+-- 3. Play most recent recording
+latest = hs.execute("ls -t /tmp/whisper_dict/*.wav 2>/dev/null | head -1"):gsub("\n", "")
+if latest ~= "" then hs.execute("afplay '" .. latest .. "'") end
+
+-- 4. Check file count and total size
+print(hs.execute("du -sh /tmp/whisper_dict 2>/dev/null && ls /tmp/whisper_dict/*.wav 2>/dev/null | wc -l"))
+
+-- 5. Check Python server process
+print(hs.execute("lsof -i :12341 2>/dev/null"))
+
+-- 6. Enable debug logging
 wd.logger:setLevel("DEBUG")
--- View: Hammerspoon menu → Console
+print("Debug logging enabled - check console output")
+#+end_src
+
+** Enable Debug Logging
+
+For detailed diagnostics:
+#+begin_src lua
+wd.logger:setLevel("DEBUG")
+-- Then check: Hammerspoon menu → Console
+-- Look for [DEBUG], [ASYNC], and [DEBUG BACKEND] messages
+#+end_src
+
+** Debugging Recording Backends
+
+*** Check if Files are Being Created
+
+From Hammerspoon console:
+#+begin_src lua
+-- List recent recordings
+hs.execute("ls -lht /tmp/whisper_dict/*.wav | head -5")
+
+-- Check file sizes (should be >100KB for real audio)
+hs.execute("ls -lh /tmp/whisper_dict/*.wav | tail -3")
+#+end_src
+
+From terminal:
+#+begin_src bash
+# List all recordings with sizes
+ls -lht /tmp/whisper_dict/*.wav | head -10
+
+# For Python stream backend, check chunk files
+ls -lht /tmp/whisper_dict/*_chunk_*.wav
+#+end_src
+
+*** Verify Audio Content
+
+*Play most recent recording:*
+#+begin_src lua
+-- From Hammerspoon console
+latest = hs.execute("ls -t /tmp/whisper_dict/*.wav | head -1"):gsub("\n", "")
+hs.execute("afplay " .. latest)
+#+end_src
+
+#+begin_src bash
+# From terminal - play most recent
+afplay $(ls -t /tmp/whisper_dict/*.wav | head -1)
+
+# Play specific recording
+afplay /tmp/whisper_dict/en-20240101-120000.wav
+#+end_src
+
+*Check audio properties:*
+#+begin_src bash
+# Check duration and format
+afinfo /tmp/whisper_dict/en-20240101-120000.wav
+
+# Expected output should show:
+# - Duration: >0 seconds
+# - Sample Rate: 16000 Hz (for pythonstream) or 44100 Hz (for sox)
+# - Channels: 1 (mono)
+#+end_src
+
+*** Verify Python Stream Server Status
+
+*Check if server is running:*
+#+begin_src lua
+-- From Hammerspoon console
+hs.execute("lsof -i :12341")  -- Should show python process
+#+end_src
+
+#+begin_src bash
+# From terminal
+lsof -i :12341  # Check if port is listening
+ps aux | grep whisper_stream.py  # Check if process exists
+#+end_src
+
+*Server startup debugging:*
+#+begin_src lua
+-- Enable async startup debug messages (already in code)
+-- Check Hammerspoon console for:
+-- [ASYNC] Server startup callback executing...
+-- [ASYNC] Calling backend:startServer()...
+-- [ASYNC] startServer returned: true
+-- Python stream server ready
+#+end_src
+
+*** Check Backend Configuration
+
+From Hammerspoon console:
+#+begin_src lua
+-- Check which backend is active
+print("Recording backend:", wd.recordingBackend)
+
+-- Check if pythonstream server is running
+if wd.recordingBackend == "pythonstream" then
+  backend = wd.recordingBackends.pythonstream
+  print("Server running:", backend:isServerRunning())
+  print("Config:", hs.inspect(backend.config))
+end
+
+-- List recording directory contents
+print(hs.execute("ls -lh /tmp/whisper_dict/ | tail -10"))
 #+end_src
 
 ** Common Issues
 
-- *"recording command not found"*
-  - Check sox: =which sox=
+*** "recording command not found"
+- Check sox: =which sox=
+- Install: =brew install sox=
 
-- *"transcription method not found"*
-  - Check backend: =which whisperkit-cli= or =which whisper-cli=
+*** "transcription method not found"
+- Check backend: =which whisperkit-cli= or =which whisper-cli=
+- See Requirements section for installation
 
-- *Empty transcription*
-  - Verify audio recorded:
+*** Empty or Silent Recordings
 
-#+begin_src bash
-ls -t /tmp/whisper_dict/*.wav | head -1
-afplay /tmp/whisper_dict/your-file.wav
-#+end_src
+*File exists but transcription is empty:*
 
-*- No audio*
-- Check microphone in System Preferences → Sound → Input
+1. **Play the recording to verify it contains audio**:
+   #+begin_src bash
+   afplay /tmp/whisper_dict/your-file.wav
+   #+end_src
+
+2. **Check file size** (should be >100KB):
+   #+begin_src bash
+   ls -lh /tmp/whisper_dict/*.wav
+   #+end_src
+
+3. **Check audio properties**:
+   #+begin_src bash
+   afinfo /tmp/whisper_dict/your-file.wav | grep duration
+   # Should show: estimated duration: X.XXX sec
+   #+end_src
+
+4. **If file is silent**:
+   - Check microphone: System Settings → Sound → Input
+   - Verify input level moves when speaking
+   - Try =sox= backend to isolate issue: =wd.recordingBackend = "sox"=
+
+*** Python Stream Backend Issues
+
+*Port conflict (12341 in use):*
+
+If you see: =⚠️ Port 12341 in use!=
+
+1. **Check what's using the port**:
+   #+begin_src bash
+   lsof -i :12341
+   #+end_src
+
+2. **Kill the process** (if it's a zombie):
+   #+begin_src bash
+   lsof -ti:12341 | xargs kill -9
+   #+end_src
+
+3. **Or change the port** in your config:
+   #+begin_src lua
+   wd.recordingBackends.pythonstream.config.port = 50341  -- Use different port
+   #+end_src
+
+*Server won't start:*
+- Check Python dependencies: =pip list | grep -E "sounddevice|scipy|torch"=
+- Check port not in use: =lsof -i :12341=
+- See port conflict section above
+
+*Server starts but no recording:*
+- Check [ASYNC] messages in console
+- Verify server sends =recording_started= event
+- Enable debug logging: =wd.logger:setLevel("DEBUG")=
+
+*First words cut off:*
+- Should be fixed (recording_started sent after stream ready)
+- If still happening, check console for timing of "Ready to record" alert
+
+*** Microphone Not Working
+
+The Python stream backend uses your **system default input device**. Ensure the correct microphone is selected.
+
+1. **Check System Settings**:
+   - System Settings → Sound → Input
+   - Verify correct microphone selected (this is what Python stream will use)
+   - Speak and watch input level meter
+
+2. **Test with sox directly**:
+   #+begin_src bash
+   sox -d test.wav
+   # Speak for a few seconds, then Ctrl+C
+   afplay test.wav  # Should hear your recording
+   #+end_src
+
+3. **Check which device Python sees**:
+   #+begin_src bash
+   python3 -c "import sounddevice as sd; print(sd.query_devices())"
+   # Look for '>' marking the default input device
+   #+end_src
+
+4. **Grant microphone permissions**:
+   - System Settings → Privacy & Security → Microphone
+   - Ensure Hammerspoon has permission
 
 * Development
 
