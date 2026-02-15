@@ -8,7 +8,7 @@ Track completion status for each step. Update this section as work progresses.
 |------|------------------------------------------------|-------------|----------------|
 | 1    | Foundation - Notifier and Directory Structure  | ✅ Complete | 2026-02-15     |
 | 2    | Interface Definitions and Mock Implementations | ✅ Complete | 2026-02-15     |
-| 3    | Core Manager with State Machine                | ⬜ Pending  | -              |
+| 3    | Core Manager with State Machine                | ✅ Complete | 2026-02-15     |
 | 4    | SoxRecorder - Simple Recording Implementation  | ⬜ Pending  | -              |
 | 5    | WhisperCLITranscriber - Simple Transcription   | ⬜ Pending  | -              |
 | 6    | Integration Test - Core Subset End-to-End      | ⬜ Pending  | -              |
