@@ -61,7 +61,7 @@ end
 --- @return boolean success True if recording started successfully
 --- @return string|nil error Error message if failed to start
 function SoxRecorder:startRecording(config, onChunk, onError)
-  if self.task then
+  if self._isRecording then
     return false, "Already recording"
   end
 

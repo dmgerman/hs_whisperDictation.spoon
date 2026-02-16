@@ -593,10 +593,10 @@ describe("StreamingRecorder", function()
       customRecorder:startRecording({ outputDir = "/tmp", lang = "en" }, function() end, function() end)
 
       assert.is_not_nil(taskArgs)
-      -- Check if audio device is in args
+      -- Check if audio device is in args (uses --audio-input, not --audio-device)
       local hasDeviceArg = false
       for i, arg in ipairs(taskArgs) do
-        if arg == "--audio-device" and taskArgs[i + 1] == "BlackHole 2ch" then
+        if arg == "--audio-input" and taskArgs[i + 1] == "BlackHole 2ch" then
           hasDeviceArg = true
           break
         end

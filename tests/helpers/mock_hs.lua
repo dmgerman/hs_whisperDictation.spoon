@@ -169,11 +169,54 @@ MockHS.timer = {
   end,
 
   doAfter = function(delay, fn)
-    -- Execute immediately in tests (can't wait for real delays)
-    -- For tests that need async behavior, they can handle it themselves
-    if fn then
+    -- Execute immediately ONLY for very short delays (< 1 second)
+    -- This allows task completion callbacks to work while preventing
+    -- timeout timers from firing during tests
+    if fn and delay < 1.0 then
       fn()
     end
+    -- For longer delays, return a timer that can be stopped but doesn't fire
+    local timer = {
+      _delay = delay,
+      _fn = fn,
+      _running = true,
+      _id = #state.timers + 1,
+    }
+
+    function timer:stop()
+      self._running = false
+      return self
+    end
+
+    function timer:running()
+      return self._running
+    end
+
+    table.insert(state.timers, timer)
+    return timer
+  end,
+
+  doEvery = function(interval, fn)
+    -- Return a timer object that can be stopped, but don't actually run
+    -- Tests don't need the repeating behavior
+    local timer = {
+      _interval = interval,
+      _fn = fn,
+      _running = true,
+      _id = #state.timers + 1,
+    }
+
+    function timer:stop()
+      self._running = false
+      return self
+    end
+
+    function timer:running()
+      return self._running
+    end
+
+    table.insert(state.timers, timer)
+    return timer
   end,
 
   usleep = function(microseconds)
@@ -495,6 +538,61 @@ MockHS.application = {
     return {
       bundleID = function() return "com.apple.Terminal" end,
       name = function() return "Terminal" end,
+    }
+  end,
+}
+
+--- hs.window - Window management
+MockHS.window = {
+  focusedWindow = function()
+    return {
+      screen = function()
+        return MockHS.screen.mainScreen()
+      end,
+    }
+  end,
+}
+
+--- hs.screen - Screen management
+MockHS.screen = {
+  mainScreen = function()
+    return {
+      frame = function()
+        return { x = 0, y = 0, w = 1920, h = 1080 }
+      end,
+    }
+  end,
+}
+
+--- hs.geometry - Geometric objects
+MockHS.geometry = {
+  rect = function(x, y, w, h)
+    return { x = x, y = y, w = w, h = h }
+  end,
+}
+
+--- hs.drawing - Drawing on screen
+MockHS.drawing = {
+  circle = function(rect)
+    return {
+      setFillColor = function() end,
+      setStrokeColor = function() end,
+      setStrokeWidth = function() end,
+      show = function() end,
+      delete = function() end,
+    }
+  end,
+}
+
+--- hs.menubar - Menubar items
+MockHS.menubar = {
+  new = function()
+    return {
+      setTitle = function() end,
+      setTooltip = function() end,
+      setClickCallback = function() end,
+      setMenu = function() end,
+      delete = function() end,
     }
   end,
 }

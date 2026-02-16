@@ -17,19 +17,17 @@
 --- Usage:
 -- wd = hs.loadSpoon("hs_whisperDictation")
 -- wd.languages = {"en", "ja", "es", "fr"}
--- wd.recordingBackend = "pythonstream"  -- or "sox" for simple recording
--- wd.transcriptionMethod = "whisperkitcli"  -- or "whispercli", "whisperserver", "groq"
+-- wd.config = {
+--   recorder = "streaming",  -- "sox" or "streaming"
+--   transcriber = "whisperkit",  -- "whispercli", "whisperkit", or "whisperserver"
+-- }
 -- wd:bindHotKeys({
 --    toggle = {dmg_all_keys, "l"},
 --    nextLang = {dmg_all_keys, ";"},
 -- })
 -- wd:start()
 --
--- Python stream backend requirements:
---   pip install sounddevice scipy torch
---
--- Requirements:
---      see readme.org
+-- Requirements: see readme.md
 
 local obj = {}
 obj.__index = obj
@@ -123,18 +121,21 @@ obj.config = {
     executable = "/opt/homebrew/bin/whisper-cli",
     modelPath = "/usr/local/whisper/ggml-large-v3.bin",
   },
+
+  whisperkit = {
+    cmd = "/opt/homebrew/bin/whisperkit-cli",
+    model = "large-v3",
+  },
+
+  whisperserver = {
+    host = "127.0.0.1",
+    port = "8080",
+    curlCmd = "/usr/bin/curl",
+  },
 }
-
--- OLD ARCHITECTURE (kept as reference, not used)
--- Recording backend selection
-obj.recordingBackend = "pythonstream"  -- "sox" or "pythonstream"
-
--- Transcription method selection
-obj.transcriptionMethod = "whisperserver"  -- "whisperkitcli", "whispercli", "whisperserver", "groq"
 
 -- UI settings
 obj.showRecordingIndicator = true
-obj.chunkAlertDuration = 5.0
 
 -- Auto-stop settings
 obj.timeoutSeconds = 1800  -- Auto-stop recording after 30 minutes. Set to nil to disable.
@@ -144,75 +145,10 @@ obj.monitorUserActivity = false
 obj.autoPasteDelay = 0.1
 obj.pasteWithEmacsYank = false
 
--- Retranscription settings
-obj.retranscribeMethod = "whisperkitcli"
-obj.retranscribeCount = 10
-
 -- Default hotkeys
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
-}
-
--- ============================================================================
--- === Backend-specific Configuration ===
--- ============================================================================
-
--- Sox backend (simple recording)
-obj.soxConfig = {
-  cmd = "/opt/homebrew/bin/sox",
-}
-
--- Python stream backend (continuous recording with VAD)
-obj.pythonstreamConfig = {
-  pythonExecutable = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
-  port = 12342,
-  host = "127.0.0.1",
-  serverStartupTimeout = 5.0,
-  silenceThreshold = 2.0,
-  minChunkDuration = 3.0,
-  maxChunkDuration = 600.0,
-}
-
--- Backward compatibility: old code accessed wd.recordingBackends.pythonstream.config.*
-obj.recordingBackends = {
-  pythonstream = {
-    config = obj.pythonstreamConfig,  -- Point to the same config
-  },
-}
-
--- ============================================================================
--- === Method-specific Configuration ===
--- ============================================================================
-
--- WhisperKit CLI method
-obj.whisperkitConfig = {
-  cmd = "/opt/homebrew/bin/whisperkit-cli",
-  model = "large-v3",
-}
-
--- Whisper CLI method (whisper.cpp)
-obj.whispercliConfig = {
-  cmd = "/opt/homebrew/bin/whisper-cli",
-  modelPath = "/usr/local/whisper/ggml-large-v3.bin",
-}
-
--- Whisper Server method
-obj.whisperserverConfig = {
-  executable = "/path/to/whisper-server",
-  modelPath = "/usr/local/whisper/ggml-model.bin",
-  host = "127.0.0.1",
-  port = "8080",
-  startupTimeout = 10,
-  curlCmd = "/usr/bin/curl",
-}
-obj.serverConfig = obj.whisperserverConfig  -- Backward compatibility alias
-
--- Groq API method
-obj.groqConfig = {
-  apiKey = nil,  -- Set to your API key or use GROQ_API_KEY env var
-  model = "whisper-large-v3",
-  timeout = 30,
 }
 
 -- ============================================================================
@@ -283,18 +219,10 @@ end
 
 obj.logger = Logger.new()
 
--- NEW ARCHITECTURE components (created in start())
-obj.manager = nil  -- Manager instance (replaces recordingManager + transcriptionManager)
+-- Architecture components (created in start())
+obj.manager = nil  -- Manager instance
 obj.recorder = nil  -- IRecorder instance
 obj.transcriber = nil  -- ITranscriber instance
-
--- OLD ARCHITECTURE components (kept as reference, not used)
-obj.eventBus = nil
-obj.backendInstance = nil
-obj.methodInstance = nil
-obj.recordingManager = nil
-obj.transcriptionManager = nil
-obj.chunkAssembler = nil
 
 -- UI state
 obj.menubar = nil
@@ -314,10 +242,6 @@ obj.shouldPaste = false
 
 -- Callback state
 obj.transcriptionCallback = nil
-
--- Server state (for whisperserver method)
-obj.serverProcess = nil
-obj.serverStarting = false
 
 -- ============================================================================
 -- === Helper Functions ===
@@ -590,177 +514,6 @@ local function stopRecordingSession()
 end
 
 -- ============================================================================
--- === Event Handlers ===
--- ============================================================================
-
-local function setupEventHandlers()
-  -- When audio chunk is ready from backend, start transcription
-  obj.eventBus:on("audio:chunk_ready", function(data)
-    obj.logger:debug(string.format("Chunk %d ready: %s", data.chunkNum or 1, data.audioFile))
-    hs.alert.show(string.format("Chunk %d recorded, transcribing...", data.chunkNum or 1), 2.0)
-
-    -- Start transcription via TranscriptionManager
-    obj.transcriptionManager:transcribe(data.audioFile, data.lang)
-      :catch(function(err)
-        obj.logger:error("Transcription failed: " .. tostring(err))
-      end)
-  end)
-
-  -- When transcription completes, add to chunk assembler
-  obj.eventBus:on("transcription:completed", function(data)
-    obj.logger:info("🔥 TRANSCRIPTION COMPLETED EVENT FIRED 🔥")
-    obj.logger:info("  audioFile: " .. (data.audioFile or "NIL"))
-    obj.logger:info("  text: " .. (data.text or "NIL"))
-    obj.logger:info("  lang: " .. (data.lang or "NIL"))
-
-    if not data.audioFile then
-      obj.logger:error("❌ CRITICAL: audioFile is nil in transcription:completed event!", true)
-      hs.alert.show("❌ BUG: No audioFile in transcription event", 10.0)
-      return
-    end
-
-    if not data.text then
-      obj.logger:error("❌ CRITICAL: text is nil in transcription:completed event!", true)
-      hs.alert.show("❌ BUG: No text in transcription event", 10.0)
-      return
-    end
-
-    -- Extract chunk number from audio file
-    local chunkNum = data.audioFile:match("_chunk_(%d+)%.wav$")
-    chunkNum = chunkNum and tonumber(chunkNum) or 1
-
-    obj.logger:info(string.format("  Extracted chunk number: %d", chunkNum))
-    obj.logger:info(string.format("  Adding to ChunkAssembler: chunk %d, %d chars", chunkNum, #data.text))
-
-    hs.alert.show(string.format("Chunk %d: %s", chunkNum, data.text:sub(1, 100)), obj.chunkAlertDuration)
-
-    obj.chunkAssembler:addChunk(chunkNum, data.text, data.audioFile)
-
-    obj.logger:info(string.format("  ChunkAssembler now has %d chunks", obj.chunkAssembler:getChunkCount()))
-  end)
-
-  -- When recording stops, notify chunk assembler
-  obj.eventBus:on("recording:stopped", function()
-    obj.logger:debug("Recording stopped event received")
-    obj.chunkAssembler:recordingStopped()
-    stopRecordingSession()
-  end)
-
-  -- When all transcriptions complete, handle final text
-  obj.eventBus:on("transcription:all_complete", function(data)
-    local fullText = data.text
-    local charCount = #fullText
-    local chunkCount = data.chunkCount or 1
-
-    obj.logger:info(string.format("🎉 All transcriptions complete: %d chunks, %d chars", chunkCount, charCount), true)
-    hs.alert.show(string.format("✓ Transcription complete: %d chars", charCount), 5.0)
-
-    -- Save to .txt file (find most recent .wav file)
-    local recordings = getRecentRecordings(1)
-    if #recordings > 0 then
-      local txtFile = recordings[1].path:gsub("%.wav$", ".txt")
-      local f, err = io.open(txtFile, "w")
-      if f then
-        f:write(fullText)
-        f:close()
-        obj.logger:debug("Transcript written to file: " .. txtFile)
-      else
-        obj.logger:warn("Failed to save transcription file: " .. tostring(err))
-      end
-    end
-
-    -- Handle callback if provided
-    if obj.transcriptionCallback then
-      local ok, callbackErr = pcall(obj.transcriptionCallback, fullText)
-      if not ok then
-        obj.logger:error("Callback error: " .. tostring(callbackErr))
-      end
-      obj.transcriptionCallback = nil
-
-      local message = chunkCount == 1
-        and string.format("Transcription complete: %d characters", charCount)
-        or string.format("Transcription complete: %d chunks, %d characters", chunkCount, charCount)
-      hs.alert.show(message, 5.0)
-      obj.logger:info(message)
-      resetMenuToIdle()
-      return
-    end
-
-    -- Copy to clipboard
-    local ok, err = pcall(hs.pasteboard.setContents, fullText)
-    if not ok then
-      obj.logger:error("Failed to copy to clipboard: " .. tostring(err), true)
-      resetMenuToIdle()
-      return
-    end
-
-    local message = chunkCount == 1
-      and string.format("Transcription complete: %d characters", charCount)
-      or string.format("Transcription complete: %d chunks, %d characters", chunkCount, charCount)
-
-    -- Handle auto-paste if enabled
-    if obj.shouldPaste then
-      local c = obj.activityCounts
-      local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
-
-      if obj.monitorUserActivity and hasActivity then
-        local summary = getActivitySummary()
-        local msg = "⚠️ Auto-paste blocked: User activity detected (" .. summary .. ")\nText is in clipboard - paste manually (⌘V)"
-        obj.logger:warn(msg, true)
-        hs.alert.show(msg, 10.0)  -- SHOW ALERT - not silent!
-      elseif obj.monitorUserActivity and not isSameAppFocused() then
-        local msg = "⚠️ Auto-paste blocked: Application changed during recording\nText is in clipboard - paste manually (⌘V)"
-        obj.logger:warn(msg, true)
-        hs.alert.show(msg, 10.0)  -- SHOW ALERT - not silent!
-      else
-        obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars) - pasting...", true)
-        hs.timer.doAfter(obj.autoPasteDelay, function()
-          local pasteOk, pasteErr = pcall(smartPaste)
-          if not pasteOk then
-            local errMsg = "❌ Paste failed: " .. tostring(pasteErr) .. "\nText is in clipboard - paste manually (⌘V)"
-            obj.logger:error(errMsg, true)
-            hs.alert.show(errMsg, 10.0)
-          else
-            hs.alert.show("✓ Pasted " .. charCount .. " chars", 3.0)
-          end
-        end)
-      end
-      obj.shouldPaste = false
-    else
-      obj.logger:info(obj.icons.clipboard .. " Copied to clipboard (" .. charCount .. " chars)", true)
-    end
-
-    hs.alert.show(message, 5.0)
-    obj.logger:info(message)
-    resetMenuToIdle()
-  end)
-
-  -- Handle recording errors
-  obj.eventBus:on("recording:error", function(data)
-    obj.logger:error("Recording error: " .. tostring(data.error), true)
-
-    -- Only stop recording if error occurred DURING recording
-    -- Don't stop if error was from trying to start when already running
-    if data.context ~= "start" then
-      stopRecordingSession()
-      resetMenuToIdle()
-    end
-    -- For start errors, just log - don't disrupt active recording
-  end)
-
-  -- Handle transcription errors
-  obj.eventBus:on("transcription:error", function(data)
-    local errorMsg = "❌ Transcription error: " .. tostring(data.error)
-    obj.logger:error(errorMsg)
-    hs.alert.show(errorMsg, 10.0)  -- Show prominently for 10 seconds
-  end)
-end
-
--- ============================================================================
--- === Recent Recordings ===
--- ============================================================================
-
--- ============================================================================
 -- === Language Chooser ===
 -- ============================================================================
 
@@ -785,241 +538,6 @@ local function showLanguageChooser()
 
   chooser:choices(choices)
   chooser:show()
-end
-
--- ============================================================================
--- === Retranscribe ===
--- ============================================================================
-
-local function retranscribe(audioFile, lang, callback)
-  -- Create temporary method instance for retranscription
-  local MethodFactory = dofile(spoonPath .. "lib/method_factory.lua")
-
-  local methodConfig = {}
-  if obj.retranscribeMethod == "whisperkitcli" then
-    methodConfig = obj.whisperkitConfig
-  elseif obj.retranscribeMethod == "whispercli" then
-    methodConfig = obj.whispercliConfig
-  elseif obj.retranscribeMethod == "whisperserver" then
-    methodConfig = obj.whisperserverConfig
-  elseif obj.retranscribeMethod == "groq" then
-    methodConfig = obj.groqConfig
-  end
-
-  local retransMethod, err = MethodFactory.create(obj.retranscribeMethod, methodConfig, spoonPath)
-
-  if not retransMethod then
-    obj.logger:error("Failed to create retranscription method: " .. tostring(err), true)
-    return
-  end
-
-  obj.logger:info(obj.icons.transcribing .. " Re-transcribing with " .. obj.retranscribeMethod .. " (" .. lang .. ")...", true)
-  updateMenu(obj.icons.idle .. " (" .. lang .. " T)", "Re-transcribing...")
-
-  retransMethod:transcribe(audioFile, lang)
-    :andThen(
-      function(text)
-        -- Save to .txt file
-        local txtFile = audioFile:gsub("%.wav$", ".txt")
-        local f = io.open(txtFile, "w")
-        if f then
-          f:write(text)
-          f:close()
-        end
-
-        if callback then
-          local ok, callbackErr = pcall(callback, text)
-          if not ok then
-            obj.logger:error("Callback error: " .. tostring(callbackErr))
-          end
-          hs.alert.show(string.format("Re-transcription complete: %d characters", #text), 5.0)
-        else
-          pcall(hs.pasteboard.setContents, text)
-          obj.logger:info(obj.icons.clipboard .. " Re-transcription copied to clipboard (" .. #text .. " chars)", true)
-        end
-
-        resetMenuToIdle()
-      end,
-      function(err)
-        obj.logger:error("Re-transcription failed: " .. tostring(err), true)
-        resetMenuToIdle()
-      end
-    )
-end
-
-local function showRetranscribeChooser(callback)
-  local recordings = getRecentRecordings(obj.retranscribeCount)
-  if #recordings == 0 then
-    obj.logger:warn("No recent recordings found in " .. obj.tempDir, true)
-    return
-  end
-
-  local choices = {}
-  for _, rec in ipairs(recordings) do
-    local lang, dateStr, timeStr = rec.filename:match("^(%w+)-(%d%d%d%d%d%d%d%d)-(%d%d%d%d%d%d)%.wav$")
-    local displayText = rec.filename
-    if lang and dateStr and timeStr then
-      local y = dateStr:sub(1, 4)
-      local m = dateStr:sub(5, 6)
-      local d = dateStr:sub(7, 8)
-      local hh = timeStr:sub(1, 2)
-      local mm = timeStr:sub(3, 4)
-      local ss = timeStr:sub(5, 6)
-      local timestamp = os.time({year=tonumber(y), month=tonumber(m), day=tonumber(d),
-                                  hour=tonumber(hh), min=tonumber(mm), sec=tonumber(ss)})
-      displayText = lang .. " - " .. os.date("%b %d, %Y %H:%M:%S", timestamp)
-    end
-
-    table.insert(choices, {
-      text = displayText,
-      subText = rec.filename .. string.format(" (%.1f MB)", rec.size / (1024 * 1024)),
-      path = rec.path,
-      lang = lang or "en",
-    })
-  end
-
-  local chooser = hs.chooser.new(function(choice)
-    if choice then
-      retranscribe(choice.path, choice.lang, callback)
-    end
-  end)
-
-  chooser:choices(choices)
-  chooser:show()
-end
-
--- ============================================================================
--- === Whisper Server Management (for whisperserver method) ===
--- ============================================================================
-
-local function getServerModelPath()
-  if hs.fs.attributes(obj.whisperserverConfig.modelPath) then
-    return obj.whisperserverConfig.modelPath
-  end
-  return nil
-end
-
-function obj:isServerRunning()
-  local serverUrl = string.format("http://%s:%s", obj.whisperserverConfig.host, obj.whisperserverConfig.port)
-  local ok = os.execute(string.format(
-    "%s -s -o /dev/null --connect-timeout 1 %s 2>/dev/null",
-    obj.whisperserverConfig.curlCmd, serverUrl
-  ))
-  if ok ~= true and obj.serverProcess then
-    if not obj.serverProcess:isRunning() then
-      obj.serverProcess = nil
-    end
-  end
-  return ok == true
-end
-
-function obj:startServer(callback)
-  if self:isServerRunning() then
-    if self.serverProcess then
-      self.logger:info("Whisper server already running (managed by this spoon)")
-    else
-      self.logger:info("Whisper server already running (external process)")
-    end
-    if callback then callback(true, nil) end
-    return true, nil
-  end
-
-  if self.serverStarting then
-    hs.alert.show("Server already starting...")
-    self.logger:info("Server startup already in progress")
-    return false, "Server already starting"
-  end
-
-  local modelPath = getServerModelPath()
-  if not modelPath then
-    local err = "Whisper model not found at " .. obj.whisperserverConfig.modelPath
-    self.logger:error(err, true)
-    if callback then callback(false, err) end
-    return false, err
-  end
-
-  if not hs.fs.attributes(obj.whisperserverConfig.executable) then
-    local err = "Whisper server executable not found at " .. obj.whisperserverConfig.executable
-    self.logger:error(err, true)
-    if callback then callback(false, err) end
-    return false, err
-  end
-
-  local args = {
-    "-m", modelPath,
-    "--host", obj.whisperserverConfig.host,
-    "--port", obj.whisperserverConfig.port,
-  }
-
-  self.logger:info("Starting whisper server with model " .. modelPath)
-  self.serverProcess = hs.task.new(obj.whisperserverConfig.executable, function(exitCode, stdOut, stdErr)
-    self.logger:warn("Whisper server exited with code " .. tostring(exitCode))
-    if stdErr and #stdErr > 0 then
-      self.logger:debug("Server stderr: " .. stdErr)
-    end
-    self.serverProcess = nil
-    self.serverStarting = false
-  end, args)
-
-  if not self.serverProcess then
-    local err = "Failed to create server task"
-    self.logger:error(err, true)
-    if callback then callback(false, err) end
-    return false, err
-  end
-
-  local ok, err = pcall(function() self.serverProcess:start() end)
-  if not ok then
-    self.serverProcess = nil
-    local errMsg = "Failed to start server: " .. tostring(err)
-    self.logger:error(errMsg, true)
-    if callback then callback(false, errMsg) end
-    return false, errMsg
-  end
-
-  self.serverStarting = true
-  hs.alert.show("Starting whisper server...")
-
-  local pollInterval = 0.5
-  local maxAttempts = math.ceil(obj.whisperserverConfig.startupTimeout / pollInterval)
-  local attempts = 0
-
-  local pollTimer
-  pollTimer = hs.timer.doEvery(pollInterval, function()
-    attempts = attempts + 1
-    if self:isServerRunning() then
-      pollTimer:stop()
-      self.serverStarting = false
-      self.logger:info("Whisper server ready")
-      hs.alert.show("Whisper server ready")
-      if callback then callback(true, nil) end
-    elseif attempts >= maxAttempts then
-      pollTimer:stop()
-      self.serverStarting = false
-      local errMsg = "Server failed to start after " .. obj.whisperserverConfig.startupTimeout .. " seconds"
-      self.logger:error(errMsg, true)
-      if callback then callback(false, errMsg) end
-    elseif not self.serverProcess or not self.serverProcess:isRunning() then
-      pollTimer:stop()
-      self.serverStarting = false
-      local errMsg = "Server process exited unexpectedly"
-      self.logger:error(errMsg, true)
-      if callback then callback(false, errMsg) end
-    end
-  end)
-
-  return true, nil
-end
-
-function obj:stopServer()
-  if self.serverProcess and self.serverProcess:isRunning() then
-    self.logger:info("Stopping whisper server")
-    self.serverProcess:terminate()
-    self.serverProcess = nil
-    self.serverStarting = false
-  elseif self:isServerRunning() then
-    self.logger:info("External whisper server running - not stopping (not managed by this spoon)")
-  end
 end
 
 -- ============================================================================
@@ -1118,82 +636,170 @@ function obj:isRecording()
   return self.manager and self.manager.state == "RECORDING" or false
 end
 
-function obj:transcribeLatestAgain(callback)
-  showRetranscribeChooser(callback)
-  return self
-end
-
 -- ============================================================================
 -- === Start/Stop ===
 -- ============================================================================
 
 function obj:start()
-  obj.logger:info("Starting WhisperDictation v2 (New Architecture)")
+  obj.logger:info("Starting WhisperDictation v2")
 
   -- Load new architecture components
   local Manager = dofile(spoonPath .. "core_v2/manager.lua")
   local Notifier = dofile(spoonPath .. "lib/notifier.lua")
 
-  -- Create recorder based on config
+  -- ============================================================================
+  -- === RECORDER - with fallback logic ===
+  -- ============================================================================
   local recorderType = obj.config.recorder or "sox"
-  if recorderType == "sox" then
-    local SoxRecorder = dofile(spoonPath .. "recorders/sox_recorder.lua")
-    local soxConfig = obj.config.sox or {}
-    soxConfig.tempDir = soxConfig.tempDir or obj.tempDir
-    obj.recorder = SoxRecorder.new(soxConfig)
-  elseif recorderType == "streaming" then
+  local recorderCreated = false
+
+  -- Try primary recorder
+  if recorderType == "streaming" then
     local StreamingRecorder = dofile(spoonPath .. "recorders/streaming/streaming_recorder.lua")
     local streamingConfig = obj.config.streaming or {}
     streamingConfig.tempDir = streamingConfig.tempDir or obj.tempDir
     streamingConfig.serverScript = streamingConfig.serverScript or (spoonPath .. "recorders/streaming/whisper_stream.py")
     obj.recorder = StreamingRecorder.new(streamingConfig)
+
+    local ok, err = obj.recorder:validate()
+    if ok then
+      obj.logger:info("✓ Recorder: " .. obj.recorder:getName())
+      recorderCreated = true
+    else
+      -- Streaming failed, try sox fallback
+      Notifier.show("init", "warning", "StreamingRecorder unavailable: " .. tostring(err) .. ", using SoxRecorder as fallback")
+      obj.logger:warn("StreamingRecorder validation failed: " .. tostring(err) .. ", falling back to Sox")
+
+      local SoxRecorder = dofile(spoonPath .. "recorders/sox_recorder.lua")
+      local soxConfig = obj.config.sox or {}
+      soxConfig.tempDir = soxConfig.tempDir or obj.tempDir
+      obj.recorder = SoxRecorder.new(soxConfig)
+
+      ok, err = obj.recorder:validate()
+      if ok then
+        obj.logger:info("✓ Fallback Recorder: " .. obj.recorder:getName())
+        recorderCreated = true
+      else
+        Notifier.show("init", "error", "No working recorders found: " .. tostring(err))
+        obj.logger:error("Sox fallback validation failed: " .. tostring(err), true)
+        return false
+      end
+    end
+  elseif recorderType == "sox" then
+    local SoxRecorder = dofile(spoonPath .. "recorders/sox_recorder.lua")
+    local soxConfig = obj.config.sox or {}
+    soxConfig.tempDir = soxConfig.tempDir or obj.tempDir
+    obj.recorder = SoxRecorder.new(soxConfig)
+
+    local ok, err = obj.recorder:validate()
+    if ok then
+      obj.logger:info("✓ Recorder: " .. obj.recorder:getName())
+      recorderCreated = true
+    else
+      Notifier.show("init", "error", "Recorder validation failed: " .. tostring(err))
+      obj.logger:error("SoxRecorder validation failed: " .. tostring(err), true)
+      return false
+    end
   else
-    local errorMsg = "Unknown recorder type: " .. recorderType
-    obj.logger:error(errorMsg, true)
-    Notifier.show("init", "error", errorMsg)
+    Notifier.show("init", "error", "Unknown recorder type: " .. recorderType)
+    obj.logger:error("Unknown recorder type: " .. recorderType, true)
     return false
   end
 
-  -- Create transcriber based on config
+  if not recorderCreated then
+    Notifier.show("init", "error", "Failed to create recorder")
+    obj.logger:error("Failed to create recorder", true)
+    return false
+  end
+
+  -- ============================================================================
+  -- === TRANSCRIBER - with fallback logic ===
+  -- ============================================================================
   local transcriberType = obj.config.transcriber or "whispercli"
-  if transcriberType == "whispercli" then
-    local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
-    local cliConfig = obj.config.whispercli or {}
-    obj.transcriber = WhisperCLITranscriber.new(cliConfig)
-  elseif transcriberType == "whisperkit" then
+  local transcriberCreated = false
+
+  -- Try primary transcriber
+  if transcriberType == "whisperkit" then
     local WhisperKitTranscriber = dofile(spoonPath .. "transcribers/whisperkit_transcriber.lua")
     local kitConfig = obj.config.whisperkit or {}
     obj.transcriber = WhisperKitTranscriber.new(kitConfig)
+
+    local ok, err = obj.transcriber:validate()
+    if ok then
+      obj.logger:info("✓ Transcriber: " .. obj.transcriber:getName())
+      transcriberCreated = true
+    else
+      -- WhisperKit failed, try whispercli fallback
+      Notifier.show("init", "warning", "WhisperKit unavailable: " .. tostring(err) .. ", using WhisperCLI as fallback")
+      obj.logger:warn("WhisperKit validation failed: " .. tostring(err) .. ", falling back to WhisperCLI")
+
+      local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
+      local cliConfig = obj.config.whispercli or {}
+      obj.transcriber = WhisperCLITranscriber.new(cliConfig)
+
+      ok, err = obj.transcriber:validate()
+      if ok then
+        obj.logger:info("✓ Fallback Transcriber: " .. obj.transcriber:getName())
+        transcriberCreated = true
+      else
+        Notifier.show("init", "error", "No working transcribers found: " .. tostring(err))
+        obj.logger:error("WhisperCLI fallback validation failed: " .. tostring(err), true)
+        return false
+      end
+    end
   elseif transcriberType == "whisperserver" then
     local WhisperServerTranscriber = dofile(spoonPath .. "transcribers/whisperserver_transcriber.lua")
     local serverConfig = obj.config.whisperserver or {}
     obj.transcriber = WhisperServerTranscriber.new(serverConfig)
+
+    local ok, err = obj.transcriber:validate()
+    if ok then
+      obj.logger:info("✓ Transcriber: " .. obj.transcriber:getName())
+      transcriberCreated = true
+    else
+      -- WhisperServer failed, try whispercli fallback
+      Notifier.show("init", "warning", "WhisperServer unavailable: " .. tostring(err) .. ", using WhisperCLI as fallback")
+      obj.logger:warn("WhisperServer validation failed: " .. tostring(err) .. ", falling back to WhisperCLI")
+
+      local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
+      local cliConfig = obj.config.whispercli or {}
+      obj.transcriber = WhisperCLITranscriber.new(cliConfig)
+
+      ok, err = obj.transcriber:validate()
+      if ok then
+        obj.logger:info("✓ Fallback Transcriber: " .. obj.transcriber:getName())
+        transcriberCreated = true
+      else
+        Notifier.show("init", "error", "No working transcribers found: " .. tostring(err))
+        obj.logger:error("WhisperCLI fallback validation failed: " .. tostring(err), true)
+        return false
+      end
+    end
+  elseif transcriberType == "whispercli" then
+    local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
+    local cliConfig = obj.config.whispercli or {}
+    obj.transcriber = WhisperCLITranscriber.new(cliConfig)
+
+    local ok, err = obj.transcriber:validate()
+    if ok then
+      obj.logger:info("✓ Transcriber: " .. obj.transcriber:getName())
+      transcriberCreated = true
+    else
+      Notifier.show("init", "error", "Transcriber validation failed: " .. tostring(err))
+      obj.logger:error("WhisperCLI validation failed: " .. tostring(err), true)
+      return false
+    end
   else
-    local errorMsg = "Unknown transcriber type: " .. transcriberType
-    obj.logger:error(errorMsg, true)
-    Notifier.show("init", "error", errorMsg)
+    Notifier.show("init", "error", "Unknown transcriber type: " .. transcriberType)
+    obj.logger:error("Unknown transcriber type: " .. transcriberType, true)
     return false
   end
 
-  -- Validate recorder
-  local ok, err = obj.recorder:validate()
-  if not ok then
-    local errorMsg = "Recorder validation failed: " .. tostring(err)
-    obj.logger:error(errorMsg, true)
-    Notifier.show("init", "error", errorMsg)
+  if not transcriberCreated then
+    Notifier.show("init", "error", "Failed to create transcriber")
+    obj.logger:error("Failed to create transcriber", true)
     return false
   end
-  obj.logger:info("✓ Recorder: " .. obj.recorder:getName())
-
-  -- Validate transcriber
-  ok, err = obj.transcriber:validate()
-  if not ok then
-    local errorMsg = "Transcriber validation failed: " .. tostring(err)
-    obj.logger:error(errorMsg, true)
-    Notifier.show("init", "error", errorMsg)
-    return false
-  end
-  obj.logger:info("✓ Transcriber: " .. obj.transcriber:getName())
 
   -- Create Manager
   obj.manager = Manager.new(obj.recorder, obj.transcriber, {
@@ -1219,14 +825,7 @@ function obj:start()
       if oldState == "TRANSCRIBING" and obj.shouldPaste then
         obj.logger:info("Auto-paste enabled, checking conditions...")
 
-        local clipboard = hs.pasteboard.getContents()
-        if not clipboard or clipboard == "" then
-          obj.logger:warn("No clipboard content to paste")
-          obj.shouldPaste = false
-          return
-        end
-
-        -- Check activity monitoring conditions
+        -- Check activity monitoring conditions FIRST (before clipboard check)
         if obj.monitorUserActivity then
           local c = obj.activityCounts
           local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
@@ -1250,8 +849,17 @@ function obj:start()
         end
 
         -- All checks passed - perform auto-paste
+        -- IMPORTANT: Read clipboard INSIDE timer callback to ensure fresh content
         obj.logger:info("Auto-paste conditions met, pasting...")
         hs.timer.doAfter(obj.autoPasteDelay, function()
+          -- Read clipboard NOW (not earlier) to get fresh transcription
+          local clipboard = hs.pasteboard.getContents()
+
+          if not clipboard or clipboard == "" then
+            obj.logger:warn("No clipboard content to paste")
+            return
+          end
+
           local pasteOk, pasteErr = pcall(smartPaste)
           if not pasteOk then
             local errMsg = "❌ Paste failed: " .. tostring(pasteErr) .. "\nText is in clipboard - paste manually (⌘V)"
@@ -1329,9 +937,6 @@ function obj:bindHotKeys(mapping)
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select whisper language for transcription [Audio]", showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
-    elseif name == "retranscribe" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Retranscribe latest audio [Audio]", function() obj:transcribeLatestAgain() end)
-      obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self
