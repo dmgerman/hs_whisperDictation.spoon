@@ -81,6 +81,196 @@ From spoon root directory:
 
 See [`testing.md`](testing.md) for detailed examples and best practices.
 
+### Testing Patterns Validated in Step 6 (New Architecture)
+
+**CRITICAL LEARNINGS**: Step 6 (Integration Tests) validated key patterns that apply to all remaining steps (7-10).
+
+#### 1. Manager State Clearing Pattern
+
+**Discovery**: Manager clears all tracking state when transitioning to IDLE:
+
+```lua
+function Manager:_onStateEntered(state, context)
+  if state == Manager.STATES.IDLE then
+    self.results = {}  -- ← CLEARED on IDLE entry!
+    self.pendingTranscriptions = 0
+    self.recordingComplete = false
+    self.currentLanguage = nil
+  end
+end
+```
+
+**Implications for Testing**:
+- ❌ **Cannot inspect `manager.results` after completion** - will always be empty
+- ✅ **Must check clipboard** via `hs.pasteboard.getContents()` for final output
+- ✅ **Can test in-progress state** before transition to IDLE completes
+- This is **by design** for clean state resets, not a bug
+
+**Example**:
+```lua
+-- ❌ WRONG - results cleared after completion
+manager:startRecording("en")
+manager:stopRecording()
+assert.is_not_nil(manager.results[1])  -- FAILS - already cleared!
+
+-- ✅ CORRECT - check clipboard instead
+manager:startRecording("en")
+manager:stopRecording()
+local clipboard = MockHS.pasteboard.getContents()
+assert.is_not_nil(clipboard)  -- PASSES - results copied before clearing
+```
+
+#### 2. Two-Layer Testing Strategy
+
+**Pattern**: Every component should have TWO layers of integration tests:
+
+**Layer 1: Mock Integration Tests**
+- Fast (completes in seconds)
+- Tests logic, state machines, error paths
+- Uses MockRecorder + MockTranscriber
+- Deterministic, no external dependencies
+- Example: `tests/spec/integration/new_architecture_basic_spec.lua` (41 tests)
+
+**Layer 2: Real Audio Integration Tests**
+- Realistic validation with actual data
+- Tests file handling, real components
+- Uses real audio files from fixtures
+- Still runs via `busted` (not live Hammerspoon)
+- Example: `tests/spec/integration/new_architecture_real_audio_spec.lua` (27 tests)
+
+**Why Both Are Essential**:
+- Layer 1 catches logic bugs quickly
+- Layer 2 validates real-world integration
+- Don't skip either layer
+
+**Apply This Pattern To**:
+- Step 8: StreamingRecorder (mock + real audio layers)
+- Step 8: Additional transcribers (mock + real audio layers)
+- Step 9: Validation and fallback chains
+
+#### 3. Mock Test Setup Pattern (CRITICAL)
+
+**Correct Pattern** (validated across 68 tests):
+
+```lua
+-- At top of test file:
+local MockHS = require("tests.helpers.mock_hs")
+_G.hs = MockHS  -- ← Must assign to global
+
+-- In before_each:
+MockHS._resetAll()  -- ← Note: _resetAll, not reset()
+
+-- In after_each:
+if recorder then recorder:cleanup() end  -- Clean up timers
+
+-- In tests:
+local alerts = MockHS.alert._getAlerts()  -- ← Note: _getAlerts
+local clipboard = MockHS.pasteboard.getContents()
+MockHS.fs._registerFile(path, { mode = "file", size = 1024 })
+```
+
+**Common Mistakes to Avoid**:
+- ❌ `require("tests.helpers.mock_hs")` without `_G.hs = MockHS`
+- ❌ `MockHS.reset()` instead of `MockHS._resetAll()`
+- ❌ `MockHS.alert.getCalls()` instead of `MockHS.alert._getAlerts()`
+
+#### 4. Three Testing Levels (Not Two)
+
+**Discovery**: There are THREE distinct testing levels:
+
+1. **Unit Tests with Mocks** (Steps 1-6)
+   - Run via `busted`
+   - No Hammerspoon process required
+   - Synchronous mock behavior
+   - Fast, deterministic
+
+2. **Integration Tests with Real Components** (Step 6 Layer 2)
+   - Run via `busted`
+   - Uses real audio files from fixtures
+   - Still uses mocks for Hammerspoon APIs
+   - No live Hammerspoon process required
+
+3. **Live Hammerspoon Tests** (Step 7+)
+   - Run via shell scripts (`tests/test_*.sh`)
+   - Actual Hammerspoon process running
+   - Real async timing, real APIs
+   - Test through spoon interface
+
+**Why Live Tests Deferred to Step 7**:
+- New architecture uses relative `dofile()` paths (e.g., `dofile("lib/notifier.lua")`)
+- Requires correct working directory from init.lua
+- Before Step 7 (init.lua integration), can't load via `hs.loadSpoon()`
+- After Step 7, can use shell-based tests with `hs.loadSpoon("hs_whisperDictation")`
+
+**Action for Steps 7+**: Add shell-based live tests after init.lua integration, following pattern from `tests/test_sox_integration.sh`.
+
+#### 5. Fixture Infrastructure (Production-Ready)
+
+**Available Test Data**:
+- **44+ real audio recordings** with matching transcripts
+- **3 fixture chunks**: short, medium, long
+- **Automatic discovery**: `Fixtures.getCompleteRecordings()`
+- **Smart comparison**: `Fixtures.compareTranscripts(actual, expected, tolerance)`
+- **Normalization**: `Fixtures.normalizeTranscript(text)` handles whitespace/newlines
+- **Performance**: <1 second to load all recordings
+
+**Usage Pattern for Real Transcriber Testing** (Step 8):
+
+```lua
+local Fixtures = require("tests.helpers.fixtures")
+
+-- Get real recording with transcript
+local recordings = Fixtures.getCompleteRecordings()
+local recording = recordings[1]
+
+-- Transcribe with real transcriber
+transcriber:transcribe(recording.audio, "en",
+  function(actualText)
+    -- Compare with expected (allow variations)
+    local expectedText = Fixtures.readTranscript(recording.transcript)
+    local match, similarity = Fixtures.compareTranscripts(
+      actualText,
+      expectedText,
+      0.85  -- 85% tolerance for model variations
+    )
+    assert.is_true(match, "Similarity: " .. similarity)
+  end,
+  function(err) error(err) end
+)
+```
+
+**Don't Create New Test Audio**: Leverage existing 44+ recordings in `tests/fixtures/` and `tests/data/`.
+
+#### 6. Error Recovery Patterns (Validated)
+
+**Patterns That Work Well**:
+
+1. **Auto-reset from ERROR**: `startRecording()` auto-resets to IDLE when in ERROR state
+2. **Manual reset**: `manager:reset()` available for explicit recovery
+3. **Graceful degradation**: Partial results when some chunks fail
+4. **Error placeholders**: Failed chunks get `[chunk N: error - msg]` in results
+
+**All New Components Should**:
+- Transition to ERROR on validation failures
+- Return `(false, errorMsg)` on synchronous failures
+- Call `onError(errorMsg)` for async failures
+- Allow recovery via auto-reset or manual reset
+
+#### 7. Test File Organization
+
+**Naming Convention** (maintain for Steps 7-10):
+
+```
+tests/spec/integration/
+├── new_architecture_basic_spec.lua           # ✅ Layer 1: Mocks (41 tests)
+├── new_architecture_real_audio_spec.lua      # ✅ Layer 2: Real audio (27 tests)
+├── new_architecture_streaming_spec.lua       # Step 8: StreamingRecorder
+├── new_architecture_transcribers_spec.lua    # Step 8: All transcribers
+└── new_architecture_fallback_spec.lua        # Step 9: Validation chains
+```
+
+**Pattern**: `new_architecture_<component>_spec.lua` for clear identification.
+
 ### Testing Async/Callback Code with Mocks
 
 **CRITICAL**: The mock infrastructure (`tests/helpers/mock_hs.lua`) executes all async operations **synchronously** for testing. This requires specific testing strategies.
@@ -475,3 +665,5 @@ make test-live
 - 2026-02: **Testing async/callback code with synchronous mocks** - Mock's `hs.timer.doAfter()` executes immediately, causing task completion callbacks to fire during `task:start()`. Solution: Use explicit state flags (`_isRecording`) instead of checking task existence, test callback invocation rather than state after return, and expect final states in integration tests. See "Testing Async/Callback Code with Mocks" section above for detailed patterns.
 - 2026-02: **Live Hammerspoon testing framework** - Use shell-based integration tests in `tests/test_*.sh` with the test framework in `tests/lib/test_framework.sh`. Key patterns: use `hs_eval()` with timeout, `sleep` between async operations, check console for errors with `get_recent_console()`, verify files on disk, test full lifecycle (start → active → stop → inactive). See "Testing with Real Hammerspoon" section for detailed examples.
 - 2026-02: **Live integration tests require spoon integration** - New architecture components use relative `dofile()` paths (e.g., `dofile("recorders/i_recorder.lua")`), which only work when loaded from init.lua (correct working directory). Before Step 8 (init.lua integration), use comprehensive unit tests with mocks. After Step 8, add full shell-based integration tests through `spoon.hs_whisperDictation` interface like old architecture tests.
+- 2026-02: **Step 6 validated critical testing patterns** - Manager clears results on IDLE transition (check clipboard, not results array). Two-layer testing (mocks + real audio) is essential, not optional. Three testing levels exist: unit tests, integration tests via busted, and live Hammerspoon tests. Mock test setup requires `_G.hs = MockHS` and `MockHS._resetAll()`. Fixture infrastructure with 44+ recordings is production-ready for Steps 7-10. See "Testing Patterns Validated in Step 6" section for complete details.
+- 2026-02: **Manager state clearing is by design** - When Manager transitions to IDLE, it clears `results`, `pendingTranscriptions`, `recordingComplete`, etc. This is intentional for clean state resets. Always check clipboard for final output after completion, never `manager.results` (will be empty). This is NOT a bug.

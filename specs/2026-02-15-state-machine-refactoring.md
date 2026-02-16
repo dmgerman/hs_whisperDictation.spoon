@@ -11,7 +11,7 @@ Track completion status for each step. Update this section as work progresses.
 | 3    | Core Manager with State Machine                | ✅ Complete | 2026-02-15     |
 | 4    | SoxRecorder - Simple Recording Implementation  | ✅ Complete | 2026-02-15     |
 | 5    | WhisperCLITranscriber - Simple Transcription   | ✅ Complete | 2026-02-15     |
-| 6    | Integration Test - Core Subset End-to-End      | ⬜ Pending  | -              |
+| 6    | Integration Test - Core Subset End-to-End      | ✅ Complete | 2026-02-15     |
 | 7    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
 | 8    | Dual API Support in init.lua                   | ⬜ Pending  | -              |
 | 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending  | -              |

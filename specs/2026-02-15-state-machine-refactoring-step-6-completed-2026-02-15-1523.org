@@ -1,0 +1,148 @@
+#+TITLE: Step 6 Completion Report: Integration Tests - Core Subset End-to-End
+#+DATE: 2026-02-15 15:23
+#+AUTHOR: Claude Sonnet 4.5
+
+* Summary
+
+Successfully implemented Step 6 of the state machine refactoring plan: Integration Tests for the new architecture's core subset.
+
+** Work Completed
+
+- Created Layer 1: Mock Integration Tests (~41 tests)
+  - Tests Manager orchestration with MockRecorder and MockTranscriber
+  - Validates state machine logic, transitions, and error handling
+  - Fast, deterministic tests with complete mock infrastructure
+
+- Created Layer 2: Real Audio Integration Tests (~27 tests)
+  - Tests with actual audio files from fixtures
+  - Validates file handling, SoxRecorder, and WhisperCLITranscriber
+  - Uses Fixtures helper for test data management
+  - Includes transcript comparison and normalization utilities
+
+** Test Coverage
+
+*** Layer 1: Mock Integration Tests (41 tests)
+- Initialization (6 tests)
+- Full recording session - single chunk (6 tests)
+- Full recording session - multiple chunks (2 tests)
+- State machine validation (7 tests)
+- Error handling - recorder failures (3 tests)
+- Error handling - transcription failures (3 tests)
+- Error recovery (3 tests)
+- Input validation (3 tests)
+- Result assembly (4 tests)
+- Notifier integration (2 tests)
+- Concurrent operation prevention (2 tests)
+
+*** Layer 2: Real Audio Integration Tests (27 tests)
+- File handling (4 tests)
+- SoxRecorder with real audio (3 tests)
+- WhisperCLITranscriber with real audio (3 tests)
+- Manager with real components (1 test)
+- Error handling with real files (2 tests)
+- Fixture data validation (4 tests)
+- Transcript comparison (5 tests)
+- Performance characteristics (2 tests)
+- Integration scenarios (1 test)
+
+** Test Results
+
+All 68 integration tests pass:
+- ✅ Layer 1: 41/41 tests passing
+- ✅ Layer 2: 27/27 tests passing
+- ✅ Total: 68/68 tests passing (100%)
+
+** Files Changed
+
+*** New Files Created
+- =tests/spec/integration/new_architecture_basic_spec.lua= (603 lines)
+  - Comprehensive mock-based integration tests
+  - Tests all Manager state transitions and error handling
+  - Validates callback orchestration and result assembly
+
+- =tests/spec/integration/new_architecture_real_audio_spec.lua= (495 lines)
+  - Real audio file integration tests
+  - Validates SoxRecorder and WhisperCLITranscriber
+  - Tests Fixtures helper utilities
+  - Demonstrates readiness for live testing in Step 7+
+
+*** Modified Files
+- =specs/2026-02-15-state-machine-refactoring.md=
+  - Updated progress table: Step 6 marked as ✅ Complete
+
+** Git Statistics
+
+#+BEGIN_SRC
+New files:
+  tests/spec/integration/new_architecture_basic_spec.lua     | 603 lines
+  tests/spec/integration/new_architecture_real_audio_spec.lua | 495 lines
+
+Modified:
+  specs/2026-02-15-state-machine-refactoring.md | 2 lines changed
+
+Total: 1098 lines added across test files
+#+END_SRC
+
+** Key Achievements
+
+1. *Two-Layer Testing Strategy*
+   - Layer 1 (Mocks): Fast, deterministic validation of logic
+   - Layer 2 (Real Audio): Realistic validation with actual data
+   - Both layers run via busted (no Hammerspoon required)
+
+2. *Comprehensive Coverage*
+   - All Manager state transitions tested
+   - All error paths validated
+   - Both single-chunk (SoxRecorder) and multi-chunk patterns tested
+   - Input validation and edge cases covered
+
+3. *Real Audio Infrastructure*
+   - Fixtures helper provides access to 44+ real recordings
+   - Transcript comparison with normalization and similarity scoring
+   - Performance validation (fixture loading, normalization)
+   - Ready for Step 7+ live Hammerspoon testing
+
+4. *Architecture Validation*
+   - Manager orchestrates callbacks correctly
+   - State machine transitions validated
+   - Error recovery mechanisms work
+   - Result assembly handles gaps and ordering
+
+** Test Execution
+
+All tests can be run with:
+
+#+BEGIN_SRC bash
+# Layer 1: Mock integration tests (fast)
+busted tests/spec/integration/new_architecture_basic_spec.lua
+
+# Layer 2: Real audio integration tests
+busted tests/spec/integration/new_architecture_real_audio_spec.lua
+
+# Both layers together
+busted tests/spec/integration/new_architecture_*.lua
+
+# Full integration test suite (includes old architecture)
+busted tests/spec/integration/
+#+END_SRC
+
+** Next Steps
+
+Step 6 is complete. The next step is:
+
+*Step 7: Dual API Support in init.lua*
+- Modify init.lua to support both old and new architectures
+- Add configuration flag =useNewArchitecture=
+- Create dual initialization paths
+- Enable live Hammerspoon integration testing
+
+With Step 6 complete, the core subset of the new architecture (Manager + SoxRecorder + WhisperCLITranscriber) is fully tested and validated. Step 7 will integrate this into init.lua, enabling live testing through the spoon interface.
+
+** Notes
+
+- All tests follow CLAUDE.md testing patterns for async/callback code
+- Mock infrastructure correctly handles synchronous execution
+- Tests properly handle state clearing when transitioning to IDLE
+- Real audio fixtures provide rich test data (44+ recordings with transcripts)
+- Transcript comparison allows for whitespace/normalization variations
+- Performance tests validate fixture operations complete in <1 second
