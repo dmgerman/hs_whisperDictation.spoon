@@ -53,7 +53,8 @@ class TestContinuousRecorder:
                 silence_threshold=2.0,
                 min_chunk_duration=1.0,
                 max_chunk_duration=10.0,
-                sample_rate=16000
+                sample_rate=16000,
+                perfect_silence_duration=2.0  # Enable for testing
             )
             return rec
 

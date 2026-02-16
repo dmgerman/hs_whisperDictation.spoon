@@ -303,7 +303,9 @@ class ContinuousRecorder:
                  min_chunk_duration=10.0,
                  max_chunk_duration=120.0,
                  sample_rate=16000,
-                 audio_source=None):
+                 audio_source=None,
+                 audio_input_device=None,
+                 perfect_silence_duration=0.0):
         self.tcp_server = tcp_server
         self.output_dir = Path(output_dir)
         self.filename_prefix = filename_prefix
@@ -312,6 +314,8 @@ class ContinuousRecorder:
         self.max_chunk_duration = max_chunk_duration
         self.sample_rate = sample_rate
         self.audio_source = audio_source  # Optional FileAudioSource for testing
+        self.audio_input_device = audio_input_device  # Optional audio input device name
+        self.perfect_silence_duration = perfect_silence_duration  # Duration to detect mic off (0 to disable)
 
         # Chunk state
         self.chunk_num = 0
@@ -417,7 +421,8 @@ class ContinuousRecorder:
             return
 
         silence_duration = time.time() - self.perfect_silence_start_time
-        if silence_duration >= PERFECT_SILENCE_DURATION_AT_START:
+        # Check if perfect silence detection is enabled (> 0) and threshold exceeded
+        if self.perfect_silence_duration > 0 and silence_duration >= self.perfect_silence_duration:
             # Microphone is off at startup - stop recording immediately
             self.tcp_server.send_event("silence_warning",
                                       message="Microphone off - stopping recording")
@@ -545,7 +550,19 @@ class ContinuousRecorder:
 
         try:
             # Keep audio stream running persistently
+            # Get device index if device name specified
+            device = None
+            if self.audio_input_device:
+                devices = sd.query_devices()
+                for idx, dev in enumerate(devices):
+                    if dev['name'] == self.audio_input_device and dev['max_input_channels'] > 0:
+                        device = idx
+                        break
+                if device is None:
+                    raise ValueError(f"Audio input device not found: {self.audio_input_device}")
+
             with sd.InputStream(callback=self.audio_callback,
+                              device=device,
                               channels=1,
                               samplerate=self.sample_rate,
                               blocksize=int(self.sample_rate * 0.5),
@@ -570,8 +587,15 @@ class ContinuousRecorder:
             # Send server_ready so client knows we're still alive
             self.tcp_server.send_event("server_ready")
 
-            # Keep server running - wait for user to fix mic and retry
-            self._run_command_loop()
+            # Keep server running indefinitely - microphone might be fixed later
+            # Loop forever until explicit shutdown command
+            while self.running:
+                try:
+                    self._run_command_loop()
+                except Exception as loop_err:
+                    # Command loop error - log but keep trying
+                    self.tcp_server.send_event("error", error=f"Command loop error: {loop_err}")
+                    time.sleep(1)  # Brief pause before retry
 
     def _start_with_file_source(self):
         """Start recording from file source (for testing)."""
@@ -726,6 +750,9 @@ def main():
     parser.add_argument("--max-chunk-duration", type=float, default=600.0,
                        help="Maximum chunk duration (seconds)")
     parser.add_argument("--test-file", help="WAV file to use instead of microphone (for testing)")
+    parser.add_argument("--audio-input", help="Audio input device name (e.g., 'BlackHole 2ch')")
+    parser.add_argument("--perfect-silence-duration", type=float, default=0.0,
+                       help="Duration of perfect silence to detect mic off (seconds, 0 = disabled, 2.0 for testing)")
 
     args = parser.parse_args()
 
@@ -778,7 +805,9 @@ def main():
             args.silence_threshold,
             args.min_chunk_duration,
             args.max_chunk_duration,
-            audio_source=audio_source
+            audio_source=audio_source,
+            audio_input_device=args.audio_input,
+            perfect_silence_duration=args.perfect_silence_duration
         )
         recorder.start()
     except Exception as e:

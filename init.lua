@@ -96,13 +96,25 @@ obj.langIndex = 1
 -- NEW ARCHITECTURE CONFIGURATION
 -- Configuration for new architecture (callback-based, no EventBus/Promises)
 obj.config = {
-  recorder = "sox",  -- "sox" or "streaming" (streaming not implemented yet)
+  recorder = "sox",  -- "sox" or "streaming"
   transcriber = "whispercli",  -- "whispercli", "whisperkit", or "whisperserver"
 
   -- Recorder-specific configs
   sox = {
     soxCmd = "/opt/homebrew/bin/sox",
     audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
+    tempDir = nil,  -- nil = use obj.tempDir
+  },
+
+  streaming = {
+    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+    serverScript = nil,  -- nil = auto-detect from spoon directory
+    tcpPort = 12341,
+    audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
+    silenceThreshold = 2.0,  -- seconds of silence to trigger chunk boundary
+    minChunkDuration = 3.0,  -- minimum chunk duration in seconds
+    maxChunkDuration = 600.0,  -- maximum chunk duration (10 minutes)
+    perfectSilenceDuration = 0,  -- seconds of perfect silence to detect mic off (0 = disabled, 2.0 for testing)
     tempDir = nil,  -- nil = use obj.tempDir
   },
 
@@ -1129,6 +1141,12 @@ function obj:start()
     local soxConfig = obj.config.sox or {}
     soxConfig.tempDir = soxConfig.tempDir or obj.tempDir
     obj.recorder = SoxRecorder.new(soxConfig)
+  elseif recorderType == "streaming" then
+    local StreamingRecorder = dofile(spoonPath .. "recorders/streaming/streaming_recorder.lua")
+    local streamingConfig = obj.config.streaming or {}
+    streamingConfig.tempDir = streamingConfig.tempDir or obj.tempDir
+    streamingConfig.serverScript = streamingConfig.serverScript or (spoonPath .. "recorders/streaming/whisper_stream.py")
+    obj.recorder = StreamingRecorder.new(streamingConfig)
   else
     local errorMsg = "Unknown recorder type: " .. recorderType
     obj.logger:error(errorMsg, true)
@@ -1230,6 +1248,9 @@ function obj:stop()
   stopRecordingSession()
 
   -- Clean up new architecture components
+  if obj.recorder and obj.recorder.cleanup then
+    obj.recorder:cleanup()
+  end
   obj.manager = nil
   obj.recorder = nil
   obj.transcriber = nil

@@ -1,0 +1,145 @@
+#+TITLE: Step 8a Completion Report - WhisperKit and WhisperServer Transcribers
+#+DATE: 2026-02-15 18:35
+
+* Summary
+
+Implemented sub-step 8a of the state machine refactoring plan: WhisperKit and WhisperServer transcribers with comprehensive test coverage.
+
+* Work Completed
+
+** Transcriber Implementations
+
+- *WhisperKitTranscriber* (147 lines)
+  - Callback-based architecture (no Promises)
+  - Uses =whisperkit-cli= command for Apple Silicon optimization
+  - Configurable model (base, small, medium, large-v3)
+  - Validates executable availability
+  - Outputs transcription to stdout
+
+- *WhisperServerTranscriber* (173 lines)
+  - Callback-based architecture (no Promises)
+  - HTTP POST to local/remote whisper server
+  - Configurable host, port, and curl command
+  - JSON error detection
+  - Line-by-line post-processing for clean output
+
+** Test Suite
+
+*** Unit Tests (84 tests total - ALL PASS)
+- =tests/spec/unit/transcribers/whisperkit_transcriber_spec.lua= (38 tests, 476 lines)
+  - Initialization and configuration
+  - Validation (executable availability)
+  - Interface compliance (ITranscriber)
+  - Transcription lifecycle (callbacks, async patterns)
+  - Error handling
+  - Integration with Manager
+
+- =tests/spec/unit/transcribers/whisperserver_transcriber_spec.lua= (46 tests, 579 lines)
+  - Initialization and configuration
+  - Validation (curl availability)
+  - Interface compliance (ITranscriber)
+  - Transcription lifecycle
+  - Server configuration flexibility
+  - Error handling
+  - Integration with Manager
+
+*** Integration Tests (18 tests - ALL PASS)
+- =tests/spec/integration/new_architecture_transcribers_spec.lua= (18 tests, 241 lines)
+  - WhisperKit with Manager and MockRecorder
+  - WhisperServer with Manager and MockRecorder
+  - Single chunk and multiple chunk scenarios
+  - Transcriber interchangeability
+  - Interface compliance
+  - Configuration flexibility
+
+*** Live Integration Tests (2 shell scripts)
+- =tests/test_whisperkit_integration.sh= (197 lines)
+  - Tests WhisperKit through spoon interface
+  - Uses BlackHole virtual audio device + fixture audio (deterministic)
+  - Full lifecycle: IDLE → RECORDING → TRANSCRIBING → IDLE
+  - Audio routing setup/teardown
+  - Console error checking
+  - Clipboard verification
+
+- =tests/test_whisperserver_integration.sh= (204 lines)
+  - Tests WhisperServer through spoon interface
+  - Uses BlackHole virtual audio device + fixture audio (deterministic)
+  - Requires running whisper server (optional, gracefully skips if not available)
+  - Real HTTP communication
+  - Full lifecycle testing
+  - Console error checking
+
+* Test Results
+
+- Unit tests: *84/84 passing* (100%)
+- Integration tests: *18/18 passing* (100%)
+- Live tests: *2 scripts created* (require manual execution)
+- *Total: 102 automated tests, 2 live test scripts*
+
+* Files Created/Modified
+
+** New Files (7 files, 2026 total lines)
+
+*** Source Files
+- =transcribers/whisperkit_transcriber.lua= (147 lines)
+- =transcribers/whisperserver_transcriber.lua= (173 lines)
+
+*** Test Files
+- =tests/spec/unit/transcribers/whisperkit_transcriber_spec.lua= (476 lines)
+- =tests/spec/unit/transcribers/whisperserver_transcriber_spec.lua= (579 lines)
+- =tests/spec/integration/new_architecture_transcribers_spec.lua= (241 lines)
+- =tests/test_whisperkit_integration.sh= (197 lines)
+- =tests/test_whisperserver_integration.sh= (204 lines)
+
+* Key Design Decisions
+
+** Callback-Based Architecture
+
+Both transcribers follow the same pattern established in WhisperCLI:
+- Synchronous validation (=validate()= returns =(success, error)=)
+- Async transcription with callbacks (=onSuccess=, =onError=)
+- Option-style returns for synchronous operations
+
+** Different Output Handling
+
+- *WhisperKit*: Reads from stdout (single stream)
+- *WhisperServer*: Parses HTTP response, detects JSON errors, post-processes lines
+
+** Validation Scope
+
+- *WhisperKit*: Validates executable in PATH (=which whisperkit-cli=)
+- *WhisperServer*: Validates curl availability only (NOT server availability)
+  - Server may not be running at validation time
+  - Actual server errors handled during transcription
+
+** Configuration Flexibility
+
+- WhisperKit: Model selection (base, small, medium, large-v3)
+- WhisperServer: Host, port, curl command path
+
+* Test Coverage Highlights
+
+- All ITranscriber interface methods tested
+- Callback invocation patterns verified
+- Error handling (missing files, command failures, server errors)
+- Integration with Manager (single and multiple chunks)
+- Transcriber interchangeability (same interface, different implementations)
+- Configuration variations
+
+* Next Steps
+
+As per user instruction, *DO NOT proceed to sub-step 8b* (StreamingRecorder) until user approval.
+
+Sub-step 8b will implement:
+- =recorders/streaming/streaming_recorder.lua=
+- Python server integration (keep =whisper_stream.py= as-is)
+- Multi-chunk emission during recording (not just at stop)
+- ~80 unit tests + ~40 integration tests + live test
+
+* Notes
+
+- Both transcribers successfully implement ITranscriber interface
+- Can be swapped in Manager without code changes
+- All tests pass with mock environment
+- Live tests require actual dependencies (whisperkit-cli, whisper server)
+- No Groq transcriber (deferred - no API key available yet)

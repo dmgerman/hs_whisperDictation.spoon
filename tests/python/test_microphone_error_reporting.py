@@ -15,6 +15,10 @@ def test_microphone_error_stays_running():
     # Create a script that mocks microphone failure
     test_script = '''
 import sys
+from pathlib import Path
+
+# Add recorders/streaming to path so whisper_stream can be imported
+sys.path.insert(0, str(Path.cwd() / "recorders" / "streaming"))
 
 # Mock sounddevice before importing whisper_stream
 class MockSD:

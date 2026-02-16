@@ -222,8 +222,10 @@ function Manager:stopRecording()
   -- Show feedback
   Notifier.show("recording", "info", "Recording stopped, transcribing...")
 
-  -- Note: Don't check completion here - chunks haven't been emitted yet!
-  -- Completion will be checked in _onRecordingComplete() callback
+  -- Check if already complete (for StreamingRecorder where chunks emit during recording)
+  -- For SoxRecorder, chunks emit in _onRecordingComplete() callback, so pending > 0
+  -- For StreamingRecorder, chunks may already be transcribed, so pending might be 0
+  self:_checkIfComplete()
 
   return true, nil
 end

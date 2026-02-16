@@ -13,7 +13,7 @@ Track completion status for each step. Update this section as work progresses.
 | 5    | WhisperCLITranscriber - Simple Transcription   | ✅ Complete | 2026-02-15     |
 | 6    | Integration Test - Core Subset End-to-End      | ✅ Complete | 2026-02-15     |
 | 7    | New Architecture in init.lua                   | ✅ Complete | 2026-02-15     |
-| 8    | Additional Recorders and Transcribers          | 🔄 In Progress - 8a Complete | 2026-02-15 (8a) |
+| 8    | Additional Recorders and Transcribers          | ✅ Complete (8a, 8b) | 2026-02-15 |
 | 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending  | -              |
 | 10   | Deprecation Warnings, Full Test Suite, Cleanup | ⬜ Pending  | -              |
 
@@ -1087,10 +1087,17 @@ Step 8 has been divided into sub-steps for manageable implementation:
   - Live testing with BlackHole virtual audio device
   - Full report: `specs/2026-02-15-state-machine-refactoring-completed-2026-02-15-2026.org`
 
-- **Step 8b: StreamingRecorder** - ⬜ PENDING (awaiting user approval)
-  - `recorders/streaming/streaming_recorder.lua` (~400 lines planned)
+- **Step 8b: StreamingRecorder** - ✅ COMPLETE (2026-02-15)
+  - `recorders/streaming/streaming_recorder.lua` (565 lines)
+  - `recorders/streaming/whisper_stream.py` (moved and enhanced with parameter configurability)
   - Multi-chunk emission during recording
-  - ~80 unit tests + ~40 integration tests + live tests
+  - 50 unit tests + 15 integration tests + 25 live Hammerspoon tests = 90 tests (ALL PASSING)
+  - 69 Python tests (ALL PASSING)
+  - Critical Manager bug fix: stopRecording() transition
+  - Full parameter configurability via command line
+  - Server resilience fixes (stays running on microphone failures)
+  - Integrated into init.lua and dmg-functions.lua
+  - Full report: `specs/2026-02-15-state-machine-refactoring-completed-2026-02-15-2209.org`
 
 - **Step 8c: Additional Transcribers (if needed)** - ⬜ PENDING
   - Groq transcriber (deferred - no API key available)

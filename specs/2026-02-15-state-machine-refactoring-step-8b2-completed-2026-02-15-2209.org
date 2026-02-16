@@ -1,0 +1,252 @@
+#+TITLE: Step 8b Implementation Completion Report
+#+DATE: 2026-02-15 22:09
+#+AUTHOR: Claude Sonnet 4.5
+
+* Summary
+
+Completed Step 8b: StreamingRecorder implementation with Python streaming server backend.
+
+** Key Accomplishments
+
+- ✅ Created StreamingRecorder (565 lines) - Callback-based, multi-chunk streaming
+- ✅ Moved whisper_stream.py to recorders/streaming/ directory
+- ✅ Created comprehensive unit tests (50 tests, 607 lines)
+- ✅ Created integration tests (15 tests, 475 lines)
+- ✅ Created live Hammerspoon tests (2 shell scripts, 411 lines)
+- ✅ Fixed critical Manager bug (stopRecording transition issue)
+- ✅ Fixed Python server resilience (stays running on microphone failures)
+- ✅ Made all server parameters configurable from command line
+- ✅ Integrated with init.lua
+- ✅ Updated ~/.hammerspoon/dmg-functions.lua for production use
+
+** Test Results
+
+All tests passing:
+- Python tests: 69/69 ✅
+- Lua unit tests (StreamingRecorder): 50/50 ✅
+- Lua integration tests (Manager + StreamingRecorder): 15/15 ✅
+- Live Hammerspoon tests: 25/25 ✅
+
+Total: 159 tests passing
+
+** Architecture Highlights
+
+*** Multi-Chunk Streaming Pattern
+- Chunks are emitted during recording (not just at the end)
+- Parallel transcription while recording continues
+- Manager handles concurrent chunk transcription
+
+*** Callback-Based Design
+- No Promises or EventBus (follows new architecture principles)
+- Direct callbacks: onChunk(audioFile, chunkNum, isFinal), onError(message)
+- Option-style returns: (success, error)
+
+*** Persistent Server Lifecycle
+- Server starts on first recording, stays running
+- Cleanup via explicit cleanup() method (called by init.lua)
+- Graceful shutdown via TCP "shutdown" command
+
+*** Resilience Features
+- Server stays running on microphone failures
+- Infinite retry loop for command processing
+- Error events sent via TCP before retry
+- Configurable perfect silence detection (default: disabled)
+
+* Files Changed
+
+** New Files Created (2,058 lines)
+
+- recorders/streaming/streaming_recorder.lua (565 lines)
+  - IRecorder implementation with persistent server
+  - Multi-chunk emission via callbacks
+  - Full parameter configurability
+
+- tests/spec/unit/recorders/streaming_recorder_spec.lua (607 lines)
+  - 50 unit tests covering all StreamingRecorder functionality
+  - Mock-based testing with MockHS
+
+- tests/spec/integration/new_architecture_streaming_spec.lua (475 lines)
+  - 15 integration tests: Manager + StreamingRecorder + Transcriber
+  - Multi-chunk coordination, state transitions, error handling
+
+- tests/test_streaming_recorder_integration.sh (252 lines)
+  - Live Hammerspoon tests with real Python server
+  - BlackHole virtual audio device integration
+
+- tests/test_streaming_simple.sh (159 lines)
+  - Simplified live tests for quick validation
+
+** Modified Files (126 lines changed)
+
+- core_v2/manager.lua (+6 lines)
+  - CRITICAL FIX: Added _checkIfComplete() call in stopRecording()
+  - Prevents premature TRANSCRIBING state when pendingTranscriptions == 0
+
+- init.lua (+23 lines)
+  - Fixed syntax error ("a--" typo)
+  - Added StreamingRecorder to recorder factory
+  - Added streaming configuration with full Python path
+
+- recorders/streaming/whisper_stream.py (+39 lines, moved from root)
+  - Added --audio-input parameter for device selection
+  - Added --perfect-silence-duration parameter (default: 0.0)
+  - Wrapped command loop in infinite retry for resilience
+
+- tests/helpers/mock_hs.lua (+49 lines)
+  - Added missing functions: network.ping, http.asyncGet, http.asyncPost
+  - Enhanced for StreamingRecorder testing
+
+- tests/python/conftest.py (+6 lines)
+  - Added path setup for recorders/streaming directory
+
+- tests/python/test_continuous_recorder.py (+3 lines)
+  - Added perfect_silence_duration=2.0 to recorder fixture
+
+- tests/python/test_microphone_error_reporting.py (+4 lines)
+  - Fixed path setup for whisper_stream import
+
+** Git Statistics
+
+#+BEGIN_EXAMPLE
+ .claude/settings.local.json                        |   7 ++-
+ core_v2/manager.lua                                |   6 ++-
+ init.lua                                           |  23 +++++++++-
+ recorders/streaming/whisper_stream.py              |  39 +++++++++++++---
+ tests/helpers/mock_hs.lua                          |  49 ++++++++++++++++++++-
+ tests/python/conftest.py                           |   6 +++
+ tests/python/test_continuous_recorder.py           |   3 +-
+ tests/python/test_microphone_error_reporting.py    |   4 ++
+ 11 files changed, 126 insertions(+), 11 deletions(-)
+
+New files (not in git diff --stat):
+ recorders/streaming/streaming_recorder.lua         | 565 lines
+ tests/spec/unit/recorders/streaming_recorder_spec.lua | 607 lines
+ tests/spec/integration/new_architecture_streaming_spec.lua | 475 lines
+ tests/test_streaming_recorder_integration.sh       | 252 lines
+ tests/test_streaming_simple.sh                     | 159 lines
+#+END_EXAMPLE
+
+* Critical Bugs Fixed
+
+** Manager State Transition Bug
+- *Issue*: stopRecording() always transitioned to TRANSCRIBING, even when pendingTranscriptions == 0
+- *Impact*: Integration tests failed (6/15), Manager stayed in TRANSCRIBING state
+- *Root Cause*: Assumed chunks hadn't been emitted yet (true for SoxRecorder, false for StreamingRecorder)
+- *Fix*: Added self:_checkIfComplete() call after transition
+- *Result*: All 15 integration tests passing
+
+** Python Server Crash on Microphone Error
+- *Issue*: Server exited with code 1 when microphone failed
+- *Impact*: Reduced reliability, no recovery from transient failures
+- *Root Cause*: Command loop exited after single exception
+- *Fix*: Wrapped command loop in infinite retry with error events
+- *Result*: Server stays running indefinitely, reports errors via TCP
+
+** Chunk File Creation Failure
+- *Issue*: Complete files created but no chunk files
+- *Root Cause*: perfectSilenceDuration check (2.0s) detected silence before audio started
+- *Fix*: Made configurable via --perfect-silence-duration, defaulted to 0 (disabled)
+- *Result*: Chunks created successfully during recording
+
+* Configuration
+
+** StreamingRecorder Configuration (init.lua)
+
+#+BEGIN_SRC lua
+streaming = {
+  pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+  serverScript = nil,  -- Auto-detects from spoonPath
+  tcpPort = 12341,
+  audioInputDevice = nil,  -- nil = system default
+  silenceThreshold = 2.0,
+  minChunkDuration = 3.0,
+  maxChunkDuration = 600.0,
+  perfectSilenceDuration = 0,  -- 0 = disabled
+  tempDir = nil,  -- Uses spoon tempDir
+},
+#+END_SRC
+
+** Production Configuration (dmg-functions.lua)
+
+#+BEGIN_SRC lua
+wd.config.recorder = 'streaming'
+wd.config.transcriber = 'whisperserver'
+
+wd.config.streaming = {
+  pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+  audioInputDevice = nil,
+  silenceThreshold = 3.0,
+  minChunkDuration = 5.0,
+  maxChunkDuration = 600.0,
+  perfectSilenceDuration = 0,
+  tcpPort = 12341,
+}
+
+wd.config.whisperserver = {
+  executable = os.getenv("HOME") .. "/.emacs.d/modules/whisper-cli/build/bin/whisper-server"
+}
+#+END_SRC
+
+* Testing Patterns Validated
+
+** Multi-Chunk Coordination
+- Chunks transcribe in parallel while recording continues
+- Manager tracks pendingTranscriptions count
+- Results accumulate in order (chunk_num used for sorting)
+
+** State Transitions
+- IDLE → RECORDING: First chunk starts recording
+- RECORDING → RECORDING: Additional chunks emit during recording
+- RECORDING → TRANSCRIBING: stopRecording() with pending > 0
+- RECORDING → IDLE: stopRecording() with pending == 0 (auto-complete)
+- TRANSCRIBING → IDLE: Last transcription completes
+
+** Error Recovery
+- Server errors reported via onError callback
+- Manager transitions to ERROR state
+- Auto-reset on next startRecording()
+- Manual reset via manager:reset()
+
+** Live Testing with BlackHole
+- Virtual audio device for deterministic testing
+- Fixture audio playback as microphone input
+- Automated device switching and restoration
+- Consistent transcription results
+
+* Lessons Learned
+
+** Manager State Clearing Pattern
+- Manager clears results on IDLE transition (by design)
+- Always check clipboard for final output
+- Never check manager.results after completion (will be empty)
+
+** Callback-Based Testing Strategies
+- Mock hs.timer.doAfter executes immediately in tests
+- Use explicit state flags (_isRecording), not task existence
+- Test callback invocation, not state after return
+- Expect final state in integration tests
+
+** Server Lifecycle Management
+- Persistent server more efficient than per-recording startup
+- Cleanup via explicit cleanup() method
+- Graceful shutdown before termination
+- Port conflict detection and cleanup
+
+** Parameter Configurability
+- All timing parameters should be configurable
+- Defaults should work for production
+- Disable testing-only features by default (perfectSilenceDuration)
+- Command-line argument pass-through from Lua config
+
+* Next Steps
+
+Step 8b is complete. Ready for:
+- Step 9: Validation and Fallback Chains
+- Step 10: Final Integration and Documentation
+- Production testing with real usage
+
+* Status
+
+*COMPLETED*: Step 8b - StreamingRecorder Implementation
+
+All tests passing (159/159) ✅

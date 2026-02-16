@@ -61,7 +61,12 @@
       "Bash(timeout 30 bash:*)",
       "Bash(bash -c '\nset -e\necho \"\"Starting...\"\"\necho \"\"Background test\"\" &\nBG_PID=$!\necho \"\"PID: $BG_PID\"\"\nsleep 1\necho \"\"About to wait...\"\"\nwait $BG_PID 2>/dev/null || true\necho \"\"After wait\"\"\necho \"\"Done\"\"\n')",
       "Bash(timeout 120 /tmp/test_no_errexit.sh:*)",
-      "Bash(/tmp/minimal_test.sh)"
+      "Bash(/tmp/minimal_test.sh)",
+      "Bash(git mv:*)",
+      "Bash(./tests/test_streaming_recorder_integration.sh:*)",
+      "Bash(timeout:*)",
+      "Bash(/Users/dmg/.config/dmg/python3.12/bin/python3:*)",
+      "Bash(./tests/test_streaming_simple.sh:*)"
     ],
     "deny": [],
     "ask": []

@@ -19,6 +19,11 @@ function MockHS._resetAll()
   state.tasks = {}
   state.timers = {}
   state.fs_files = {}
+  -- Clear task callbacks
+  if MockHS.task then
+    MockHS.task._creationCallback = nil
+    MockHS.task._exitCallback = nil
+  end
 end
 
 --- hs.alert - Alert notifications
@@ -57,6 +62,8 @@ MockHS.pasteboard = {
 
 --- hs.task - Process execution
 MockHS.task = {
+  _creationCallback = nil,  -- For testing task creation with specific arguments
+
   new = function(launchPath, callbackFn, args)
     local task = {
       _launchPath = launchPath,
@@ -64,6 +71,7 @@ MockHS.task = {
       _args = args or {},
       _pid = #state.tasks + 1,
       _running = false,
+      _streamingCallback = nil,
     }
 
     function task:start()
@@ -97,10 +105,38 @@ MockHS.task = {
       return self._running
     end
 
+    function task:setStreamingCallback(fn)
+      self._streamingCallback = fn
+      return self
+    end
+
+    -- Call creation callback if registered (for testing)
+    if MockHS.task._creationCallback then
+      MockHS.task._creationCallback(launchPath, callbackFn, args)
+    end
+
     return task
   end,
+
   _getTasks = function()
     return state.tasks
+  end,
+
+  _registerCreationCallback = function(fn)
+    MockHS.task._creationCallback = fn
+  end,
+
+  _clearCreationCallback = function()
+    MockHS.task._creationCallback = nil
+  end,
+
+  _registerExitCallback = function(fn)
+    -- For testing task exit handling
+    MockHS.task._exitCallback = fn
+  end,
+
+  _clearExitCallback = function()
+    MockHS.task._exitCallback = nil
   end,
 }
 
@@ -138,6 +174,11 @@ MockHS.timer = {
     if fn then
       fn()
     end
+  end,
+
+  usleep = function(microseconds)
+    -- Mock microsecond sleep - just return immediately in tests
+    -- No actual delay needed in tests
   end,
 
   waitUntil = function(predicateFn, actionFn, checkInterval)
@@ -242,8 +283,14 @@ MockHS.socket = {
       return self
     end
 
+    function sock:write(data)
+      self._data = self._data .. data
+      return true  -- Return success
+    end
+
     function sock:read(delimiter)
-      -- Return mock data
+      -- Store delimiter for simulation
+      self._readDelimiter = delimiter
       return ""
     end
 
