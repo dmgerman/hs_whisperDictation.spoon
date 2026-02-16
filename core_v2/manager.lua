@@ -5,7 +5,9 @@
 ---
 --- @module Manager
 
-local Notifier = dofile("lib/notifier.lua")
+-- Get the spoon directory path from this file's location
+local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
+local Notifier = dofile(spoonPath .. "../lib/notifier.lua")
 
 local Manager = {}
 Manager.__index = Manager
@@ -53,6 +55,9 @@ function Manager.new(recorder, transcriber, config)
   -- Track chunk errors for timeout/missing chunks
   self._chunkErrors = {}
 
+  -- Callbacks for UI integration
+  self.onStateChanged = nil  -- function(newState, oldState, context)
+
   return self
 end
 
@@ -86,6 +91,11 @@ function Manager:transitionTo(newState, context)
 
   -- Call state entry handler
   self:_onStateEntered(newState, context)
+
+  -- Notify UI of state change
+  if self.onStateChanged then
+    self.onStateChanged(newState, currentState, context)
+  end
 
   return true, nil
 end
@@ -212,8 +222,8 @@ function Manager:stopRecording()
   -- Show feedback
   Notifier.show("recording", "info", "Recording stopped, transcribing...")
 
-  -- Check if already complete (no chunks pending)
-  self:_checkIfComplete()
+  -- Note: Don't check completion here - chunks haven't been emitted yet!
+  -- Completion will be checked in _onRecordingComplete() callback
 
   return true, nil
 end

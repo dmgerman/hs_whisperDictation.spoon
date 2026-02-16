@@ -5,7 +5,9 @@
 ---
 --- @module WhisperCLITranscriber
 
-local ITranscriber = dofile("transcribers/i_transcriber.lua")
+-- Get the spoon directory path from this file's location
+local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
+local ITranscriber = dofile(spoonPath .. "i_transcriber.lua")
 
 local WhisperCLITranscriber = setmetatable({}, {__index = ITranscriber})
 WhisperCLITranscriber.__index = WhisperCLITranscriber
@@ -66,8 +68,9 @@ function WhisperCLITranscriber:transcribe(audioFile, lang, onSuccess, onError)
   end
 
   -- Build whisper command
+  -- whisper-cli creates output as <audioFile>.txt (appends .txt to full filename)
   local cmd = string.format(
-    "%s -m %s -l %s -f %s --output-txt 2>&1",
+    "%s -np -m %s -l %s --output-txt '%s' 2>&1",
     self.executable,
     self.modelPath,
     lang,
@@ -96,12 +99,12 @@ function WhisperCLITranscriber:transcribe(audioFile, lang, onSuccess, onError)
     end
 
     -- Read transcription from output file
-    -- whisper.cpp writes to <audiofile>.txt
+    -- whisper-cli writes to <audioFile>.txt (appends .txt to full filename)
     local txtFile = audioFile .. ".txt"
     local transcriptHandle = io.open(txtFile, "r")
     if not transcriptHandle then
       if onError then
-        onError("Failed to read transcription output file")
+        onError("Failed to read transcription output file: " .. txtFile)
       end
       return
     end

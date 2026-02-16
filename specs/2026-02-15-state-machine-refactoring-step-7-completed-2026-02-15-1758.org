@@ -1,0 +1,372 @@
+# Step 7 Completion Report - BlackHole Integration Testing & Bug Fixes
+
+**Date:** 2026-02-15
+**Session Duration:** ~2 hours
+**Step:** 7 - New Architecture in init.lua
+**Status:** ✅ Complete and Verified
+
+---
+
+## Overview
+
+Step 7 integration revealed several critical bugs that prevented the new architecture from working correctly in production. This session focused on debugging and fixing these issues through comprehensive end-to-end testing with BlackHole virtual audio device.
+
+---
+
+## Critical Bugs Fixed
+
+### 1. WhisperCLI Transcriber - Output File Path Issue
+
+**Problem:**
+- Initial implementation tried to use `--output-file` with absolute paths
+- whisper-cli doesn't respect absolute paths in this parameter
+- Attempted to read from wrong file path (removed extension instead of appending .txt)
+
+**Root Cause:**
+- whisper-cli appends `.txt` to the FULL filename including extension
+- Example: `audio.wav` → `audio.wav.txt` (NOT `audio.txt`)
+
+**Fix:**
+```lua
+-- Old (broken):
+local outputFileBase = audioFile:gsub("%.%w+$", "")  -- Remove extension
+local cmd = "whisper-cli ... --output-file '" .. outputFileBase .. "'"
+local txtFile = outputFileBase .. ".txt"
+
+-- New (working):
+local cmd = "whisper-cli -np -m model -l lang --output-txt '" .. audioFile .. "'"
+local txtFile = audioFile .. ".txt"  -- Append .txt to full filename
+```
+
+**Reference:** Old working implementation in `/tmp/hs_whisperDictation.spoon/init.lua` line 179
+
+---
+
+### 2. Manager Race Condition - Premature Completion
+
+**Problem:**
+- Manager transitioned to IDLE immediately after stopping recording
+- Transcription appeared to complete instantly with empty results
+- UI showed "Complete" before any chunks were processed
+
+**Root Cause:**
+- `stopRecording()` called `_checkIfComplete()` immediately
+- Chunks are emitted asynchronously via recorder callbacks
+- At the moment of the check, `pendingTranscriptions = 0` (no chunks received yet)
+- Manager thought work was complete and transitioned to IDLE
+
+**Sequence:**
+```
+1. stopRecording() sets recordingComplete = true
+2. stopRecording() calls _checkIfComplete()  ← BUG HERE
+3. pendingTranscriptions = 0 (chunks not emitted yet)
+4. Manager transitions to IDLE (thinks complete)
+5. Chunk callback fires (too late, already in IDLE)
+6. Transcription starts but never completes (wrong state)
+```
+
+**Fix:**
+- Removed premature `_checkIfComplete()` call from `stopRecording()`
+- Completion only checked in:
+  1. `_onRecordingComplete()` callback (when recorder finishes)
+  2. After transcription success/failure (when pending count changes)
+
+**Code Change:**
+```lua
+-- Before (line 217-218):
+Notifier.show("recording", "info", "Recording stopped, transcribing...")
+self:_checkIfComplete()  -- ← REMOVED THIS
+
+-- After:
+Notifier.show("recording", "info", "Recording stopped, transcribing...")
+-- Note: Don't check completion here - chunks haven't been emitted yet!
+```
+
+---
+
+### 3. UI Freeze - Menubar Not Updating
+
+**Problem:**
+- User reported: "UI was frozen in transcription mode (red circle)"
+- Menubar showed recording state (🎙️ 2s) and never updated
+- Manager state was correct (IDLE → RECORDING → TRANSCRIBING → IDLE)
+- But menubar stuck on RECORDING
+
+**Root Cause:**
+- Manager state transitions work correctly
+- But Manager has no way to notify init.lua about state changes
+- init.lua manages the menubar, but never receives state change events
+- Existing code only updated menubar:
+  - On manual start (via `startRecordingSession()`)
+  - Via elapsed timer during recording
+  - Never on TRANSCRIBING or completion
+
+**Fix:**
+- Added `onStateChanged` callback to Manager
+- init.lua sets this callback when creating Manager
+- Manager calls callback in `transitionTo()` after state change
+- Callback updates menubar based on new state
+
+**Implementation:**
+```lua
+-- Manager (core_v2/manager.lua):
+function Manager.new(recorder, transcriber, config)
+  -- ...
+  self.onStateChanged = nil  -- Callback for UI integration
+end
+
+function Manager:transitionTo(newState, context)
+  -- ... state transition logic ...
+  self.state = newState
+  self:_onStateEntered(newState, context)
+
+  -- Notify UI of state change
+  if self.onStateChanged then
+    self.onStateChanged(newState, currentState, context)
+  end
+end
+
+-- init.lua (line 1178+):
+obj.manager.onStateChanged = function(newState, oldState, context)
+  if newState == "TRANSCRIBING" then
+    stopRecordingSession()  -- Stop timer, hide indicator
+    updateMenu(obj.icons.transcribing .. " (" .. currentLang() .. ")", "Transcribing...")
+  elseif newState == "IDLE" then
+    stopRecordingSession()
+    resetMenuToIdle()
+  end
+end
+```
+
+**Result:**
+- Menubar now updates correctly through all state transitions
+- IDLE → 🎤 (en)
+- RECORDING → 🎙️ Xs (en)
+- TRANSCRIBING → ⏳ (en)
+- IDLE → 🎤 (en)
+
+---
+
+### 4. Audio Device Restoration - Test Infrastructure
+
+**Problem:**
+- Tests switched to BlackHole 2ch for virtual audio
+- Audio device not restored after test completion
+- User's microphone setting left in wrong state
+
+**Root Cause:**
+- `get_current_input_device()` used osascript
+- osascript command failed silently, returned empty string
+- Restoration attempted to restore to empty device name (no-op)
+
+**Fix:**
+- Updated `get_current_input_device()` to use SwitchAudioSource (more reliable)
+- Added debug output to show captured/restored device
+- Fixed to prefer SwitchAudioSource over osascript fallback
+
+**Code Change:**
+```lua
+-- Before:
+function get_current_input_device() {
+  local device=$(osascript -e '...')  -- Failed silently
+  echo "$device"
+}
+
+-- After:
+function get_current_input_device() {
+  if command -v SwitchAudioSource &>/dev/null; then
+    SwitchAudioSource -t input -c
+    return $?
+  fi
+  # Fallback to osascript with error handling
+  local device=$(osascript -e '...' 2>/dev/null)
+  echo "$device"
+}
+```
+
+**Verification:**
+- Test output shows: `# Stored original input device: Wireless Microphone`
+- Test completion shows: `# Restoring audio input to: Wireless Microphone`
+- Device properly restored after test
+
+---
+
+## Test Suite Enhancements
+
+### Expansion Summary
+
+| Category | Before | After | Added |
+|----------|--------|-------|-------|
+| Total Tests | 21 | 32 | +11 |
+| Menubar Tests | 0 | 4 | +4 |
+| Second Cycle | 0 | 6 | +6 |
+| Error Checks | 1 | 2 | +1 |
+
+### New Test Cases
+
+**Menubar State Validation (4 tests):**
+1. Test 11: Menubar shows idle icon initially (🎤)
+2. Test 14: Menubar shows recording icon with elapsed time (🎙️ Xs)
+3. Test 17: Menubar shows transcribing icon (⏳) or idle if fast
+4. Test 19: Menubar returns to idle after completion (🎤)
+
+**Second Recording Cycle (6 tests):**
+5. Test 26: Can start second recording
+6. Test 27: Menubar shows recording icon for second recording
+7. Test 28: Can stop second recording
+8. Test 29: Second transcription completes (verifies state reset)
+9. Test 30: Menubar returns to idle after second recording
+10. Test 31: Second result copied to clipboard
+
+**Additional Checks (1 test):**
+11. Test 32: No errors in console after second recording
+
+### Test Cleanup Enhancement
+
+Added automatic Hammerspoon reload at test end:
+```bash
+# Restore spoon to normal configuration (reload to reset state)
+echo "# Reloading Hammerspoon to restore normal configuration..."
+timeout 5 hs -c "hs.reload()" &
+sleep 2
+```
+
+**Purpose:** Tests reconfigure global `wd` spoon with test settings (temp directory, BlackHole input). Reload restores user's normal configuration.
+
+**Verification:**
+- After test: `wd.tempDir = "/tmp/whisper_e2e_test_XXXXX"` (test directory)
+- After reload: `wd.tempDir = "/tmp/whisper_dict"` (user directory)
+
+---
+
+## Verification Results
+
+### Test Execution
+
+```bash
+./tests/test_new_architecture_e2e.sh
+
+# All tests passed (32/32)
+```
+
+**Test Coverage:**
+- ✅ Prerequisites (BlackHole, sox, whisper-cli, model, Hammerspoon)
+- ✅ Virtual audio routing setup/teardown
+- ✅ Spoon loading and initialization
+- ✅ Manager state machine (IDLE → RECORDING → TRANSCRIBING → IDLE)
+- ✅ Menubar updates at each state transition
+- ✅ Recording lifecycle (start, active, stop, complete)
+- ✅ Transcription (chunk emission, processing, completion)
+- ✅ Results validation (clipboard, audio file, size, format)
+- ✅ Error checking (console output verification)
+- ✅ **Second recording cycle** (state reset verification)
+- ✅ Audio device restoration
+
+### Manual Testing
+
+User confirmed:
+- Transcription works correctly via hotkey/menubar
+- Menubar updates properly through all states
+- No UI freeze during transcription
+- Audio files saved to correct directory (`/tmp/whisper_dict/`)
+
+---
+
+## Files Modified
+
+### Source Code
+
+1. **`transcribers/whispercli_transcriber.lua`**
+   - Fixed output file path handling (append .txt to full filename)
+   - Removed `--output-file` parameter (doesn't work with absolute paths)
+
+2. **`core_v2/manager.lua`**
+   - Removed premature `_checkIfComplete()` call in `stopRecording()`
+   - Added `onStateChanged` callback support
+   - Call callback in `transitionTo()` for UI notifications
+
+3. **`init.lua`**
+   - Added `manager.onStateChanged` callback setup
+   - Updates menubar on TRANSCRIBING and IDLE state transitions
+
+### Test Infrastructure
+
+4. **`tests/test_new_architecture_e2e.sh`**
+   - Added 4 menubar state tests
+   - Added 6 second recording cycle tests
+   - Added 1 additional error check
+   - Added Hammerspoon reload at end for cleanup
+
+5. **`tests/lib/audio_routing.sh`**
+   - Fixed `get_current_input_device()` to use SwitchAudioSource
+   - Added debug output for device capture/restoration
+   - Improved error handling and sleep timing
+
+### Documentation
+
+6. **`CLAUDE.md`**
+   - Added 7 new lessons learned
+   - Documented WhisperCLI behavior
+   - Documented Manager completion checking pattern
+   - Documented UI update callback pattern
+   - Documented audio device management
+   - Documented test cleanup requirements
+   - Documented multi-cycle test requirements
+
+7. **`specs/2026-02-15-state-machine-refactoring.md`**
+   - Added Step 7 completion summary
+   - Documented bug fixes and test enhancements
+   - Updated verification status
+
+---
+
+## Lessons Learned
+
+See `CLAUDE.md` lines 670-676 for complete lessons. Key takeaways:
+
+1. **Never check completion immediately after async operations** - Wait for callbacks
+2. **UI layer needs state change notifications** - Manager can't update UI directly
+3. **whisper-cli has quirky output file behavior** - Always check existing implementations
+4. **Tests must restore global state** - Or use hs.reload() to reset
+5. **Use SwitchAudioSource for audio management** - More reliable than osascript
+6. **Multi-cycle tests catch reset bugs** - Single-cycle tests miss state leaks
+7. **BlackHole + fixture audio = deterministic e2e tests** - No manual recording needed
+
+---
+
+## Next Steps
+
+Step 7 is now complete and verified. Ready to proceed with:
+
+**Step 8:** Additional Recorders and Transcribers
+- StreamingRecorder (continuous recording with VAD)
+- WhisperKitTranscriber
+- GroqTranscriber
+- WhisperServerTranscriber
+
+**Step 9:** Validation, Fallback Chains, Documentation
+- Async validation with fallback chains
+- Migration guide for users
+
+**Step 10:** Deprecation Warnings, Full Test Suite, Cleanup
+- Deprecate old architecture
+- Complete test coverage
+
+---
+
+## Summary
+
+Step 7 integration testing uncovered 4 critical bugs that would have prevented production use:
+1. Transcription file path handling
+2. Manager race condition causing premature completion
+3. UI freeze from missing state change notifications
+4. Audio device restoration failures
+
+All bugs fixed and verified through comprehensive testing. System now fully functional with:
+- ✅ Proper state machine flow
+- ✅ Real-time UI updates
+- ✅ Multiple recording cycles
+- ✅ Audio device management
+- ✅ 32 passing tests
+
+**The new architecture is production-ready for the core subset (SoxRecorder + WhisperCLITranscriber).**

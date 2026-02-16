@@ -40,7 +40,16 @@
       "Bash(./tests/test_sox_recorder_integration.sh:*)",
       "Bash(/tmp/testing_notes.md:*)",
       "Bash(head:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(./tests/test_new_architecture_e2e.sh:*)",
+      "Bash(command -v:*)",
+      "Bash(SwitchAudioSource:*)",
+      "Bash(tee:*)",
+      "Bash(whisper-cli:*)",
+      "Bash(TEST_AUDIO=\"/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/tests/fixtures/audio/complete/en-20260214-200536.wav\")",
+      "Bash(OUTPUT_BASE=\"/tmp/test_absolute_output\")",
+      "Bash(grep:*)",
+      "Bash(/opt/homebrew/bin/whisper-cli:*)"
     ],
     "deny": [],
     "ask": []

@@ -93,6 +93,27 @@ obj.tempDir = "/tmp/whisper_dict"
 obj.languages = {"en"}
 obj.langIndex = 1
 
+-- NEW ARCHITECTURE CONFIGURATION
+-- Configuration for new architecture (callback-based, no EventBus/Promises)
+obj.config = {
+  recorder = "sox",  -- "sox" or "streaming" (streaming not implemented in Step 7)
+  transcriber = "whispercli",  -- "whispercli" only in Step 7
+
+  -- Recorder-specific configs
+  sox = {
+    soxCmd = "/opt/homebrew/bin/sox",
+    audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
+    tempDir = nil,  -- nil = use obj.tempDir
+  },
+
+  -- Transcriber-specific configs
+  whispercli = {
+    executable = "/opt/homebrew/bin/whisper-cli",
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+  },
+}
+
+-- OLD ARCHITECTURE (kept as reference, not used)
 -- Recording backend selection
 obj.recordingBackend = "pythonstream"  -- "sox" or "pythonstream"
 
@@ -250,7 +271,12 @@ end
 
 obj.logger = Logger.new()
 
--- Refactored components (created in start())
+-- NEW ARCHITECTURE components (created in start())
+obj.manager = nil  -- Manager instance (replaces recordingManager + transcriptionManager)
+obj.recorder = nil  -- IRecorder instance
+obj.transcriber = nil  -- ITranscriber instance
+
+-- OLD ARCHITECTURE components (kept as reference, not used)
 obj.eventBus = nil
 obj.backendInstance = nil
 obj.methodInstance = nil
@@ -305,9 +331,8 @@ local function resetMenuToIdle()
 end
 
 local function updateElapsed()
-  if obj.recordingManager and obj.recordingManager:isRecording() then
-    local status = obj.recordingManager:getStatus()
-    local elapsed = status.duration or 0
+  if obj.manager and obj.manager.state == "RECORDING" then
+    local elapsed = obj.startTime and (os.time() - obj.startTime) or 0
     updateMenu(string.format("%s %ds (%s)", obj.icons.recording, elapsed, currentLang()), "Recording...")
   end
 end
@@ -513,7 +538,7 @@ local function startRecordingSession()
   if obj.timeoutSeconds and obj.timeoutSeconds > 0 then
     if obj.timeoutTimer then obj.timeoutTimer:stop() end
     obj.timeoutTimer = hs.timer.doAfter(obj.timeoutSeconds, function()
-      if obj.recordingManager and obj.recordingManager:isRecording() then
+      if obj.manager and obj.manager.state == "RECORDING" then
         obj.logger:warn(obj.icons.stopped .. " Recording auto-stopped due to timeout (" .. obj.timeoutSeconds .. "s)", true)
         obj:toggleTranscribe()
       end
@@ -990,17 +1015,17 @@ end
 -- ============================================================================
 
 function obj:beginTranscribe(callbackOrPaste)
-  if not self.recordingManager then
-    self.logger:error("RecordingManager not initialized. Call start() first.", true)
+  if not self.manager then
+    self.logger:error("Manager not initialized. Call start() first.", true)
     return self
   end
 
-  if self.recordingManager:isRecording() then
-    self.logger:warn("Recording already in progress", true)
+  if self.manager.state ~= "IDLE" then
+    self.logger:warn("Recording already in progress (state: " .. self.manager.state .. ")", true)
     return self
   end
 
-  -- Parse callback/paste option
+  -- Parse callback/paste option (for future auto-paste support)
   if type(callbackOrPaste) == "function" then
     self.transcriptionCallback = callbackOrPaste
     self.shouldPaste = false
@@ -1012,74 +1037,73 @@ function obj:beginTranscribe(callbackOrPaste)
     self.shouldPaste = false
   end
 
-  -- Reset chunk assembler
-  self.chunkAssembler:reset()
-
-  -- Start recording
+  -- Ensure temp directory exists
   ensureDir(self.tempDir)
 
-  local promise = self.recordingManager:startRecording(currentLang())
+  -- Start recording via Manager (callback-based, no promises)
+  local ok, err = self.manager:startRecording(currentLang())
 
-  -- CRITICAL: Handle both success and failure explicitly
-  if not promise then
-    self.logger:error("❌ CRITICAL: startRecording returned nil - RecordingManager is broken", true)
-    resetMenuToIdle()
-    return self
-  end
-
-  promise:next(function()
+  if ok then
     self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ")", true)
     startRecordingSession()
-  end):catch(function(err)
-    -- CRITICAL: Always show errors to user
+  else
     local errorMsg = "❌ Recording failed: " .. tostring(err)
     self.logger:error(errorMsg, true)
-    hs.alert.show(errorMsg, 10.0)  -- Show for 10 seconds
+    hs.alert.show(errorMsg, 10.0)
     resetMenuToIdle()
-  end)
+  end
 
   return self
 end
 
 function obj:endTranscribe()
-  if not self.recordingManager then
-    self.logger:error("RecordingManager not initialized", true)
+  if not self.manager then
+    self.logger:error("Manager not initialized", true)
     return self
   end
 
-  if not self.recordingManager:isRecording() then
-    self.logger:warn("No recording in progress", true)
+  if self.manager.state ~= "RECORDING" then
+    self.logger:warn("No recording in progress (state: " .. self.manager.state .. ")", true)
     return self
   end
 
-  self.recordingManager:stopRecording()
-    :next(function()
-      stopRecordingSession()
-    end)
-    :catch(function(err)
-      self.logger:error("Failed to stop recording: " .. tostring(err), true)
-      stopRecordingSession()
-    end)
+  -- Stop recording via Manager (callback-based, no promises)
+  local ok, err = self.manager:stopRecording()
+
+  if ok then
+    self.logger:info("Recording stopped, transcribing...")
+    -- Note: stopRecordingSession() will be called by Manager's state transitions
+  else
+    self.logger:error("Failed to stop recording: " .. tostring(err), true)
+    stopRecordingSession()
+  end
 
   return self
 end
 
 function obj:toggleTranscribe(callbackOrPaste)
-  if not self.recordingManager then
-    self.logger:error("RecordingManager not initialized. Call start() first.", true)
+  if not self.manager then
+    self.logger:error("Manager not initialized. Call start() first.", true)
     return self
   end
 
-  if not self:isRecording() then
+  if self.manager.state == "IDLE" or self.manager.state == "ERROR" then
     self:beginTranscribe(callbackOrPaste)
-  else
+  elseif self.manager.state == "RECORDING" then
     self:endTranscribe()
+  else
+    self.logger:warn("Cannot toggle in state: " .. self.manager.state, true)
   end
   return self
 end
 
+-- Alias for backwards compatibility and convenience
+function obj:toggle(callbackOrPaste)
+  return self:toggleTranscribe(callbackOrPaste)
+end
+
 function obj:isRecording()
-  return self.recordingManager and self.recordingManager:isRecording() or false
+  return self.manager and self.manager.state == "RECORDING" or false
 end
 
 function obj:transcribeLatestAgain(callback)
@@ -1092,104 +1116,80 @@ end
 -- ============================================================================
 
 function obj:start()
-  obj.logger:info("Starting WhisperDictation v2")
-  local errorSuffix = " WhisperDictation not started"
+  obj.logger:info("Starting WhisperDictation v2 (New Architecture)")
 
-  -- Load factories and core components
-  local EventBus = dofile(spoonPath .. "lib/event_bus.lua")
-  local BackendFactory = dofile(spoonPath .. "lib/backend_factory.lua")
-  local MethodFactory = dofile(spoonPath .. "lib/method_factory.lua")
-  local RecordingManager = dofile(spoonPath .. "core/recording_manager.lua")
-  local TranscriptionManager = dofile(spoonPath .. "core/transcription_manager.lua")
-  local ChunkAssembler = dofile(spoonPath .. "core/chunk_assembler.lua")
+  -- Load new architecture components
+  local Manager = dofile(spoonPath .. "core_v2/manager.lua")
+  local Notifier = dofile(spoonPath .. "lib/notifier.lua")
 
-  -- Create event bus
-  obj.eventBus = EventBus.new()
-
-  -- Create recording backend instance
-  local backendConfig = {
-    tempDir = obj.tempDir,
-    soxCmd = obj.soxConfig.cmd,
-  }
-
-  if obj.recordingBackend == "pythonstream" then
-    backendConfig.pythonExecutable = obj.pythonstreamConfig.pythonExecutable
-    backendConfig.tcpPort = obj.pythonstreamConfig.port
-    backendConfig.host = obj.pythonstreamConfig.host
-    backendConfig.serverStartupTimeout = obj.pythonstreamConfig.serverStartupTimeout
-    backendConfig.silenceThreshold = obj.pythonstreamConfig.silenceThreshold
-    backendConfig.minChunkDuration = obj.pythonstreamConfig.minChunkDuration
-    backendConfig.maxChunkDuration = obj.pythonstreamConfig.maxChunkDuration
+  -- Create recorder based on config
+  local recorderType = obj.config.recorder or "sox"
+  if recorderType == "sox" then
+    local SoxRecorder = dofile(spoonPath .. "recorders/sox_recorder.lua")
+    local soxConfig = obj.config.sox or {}
+    soxConfig.tempDir = soxConfig.tempDir or obj.tempDir
+    obj.recorder = SoxRecorder.new(soxConfig)
+  else
+    local errorMsg = "Unknown recorder type: " .. recorderType
+    obj.logger:error(errorMsg, true)
+    Notifier.show("init", "error", errorMsg)
+    return false
   end
 
-  local backendInstance, backendErr = BackendFactory.create(
-    obj.recordingBackend,
-    obj.eventBus,
-    backendConfig,
-    spoonPath
-  )
-
-  if not backendInstance then
-    obj.logger:error("Failed to create backend: " .. tostring(backendErr) .. errorSuffix, true)
-    return
+  -- Create transcriber based on config
+  local transcriberType = obj.config.transcriber or "whispercli"
+  if transcriberType == "whispercli" then
+    local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
+    local cliConfig = obj.config.whispercli or {}
+    obj.transcriber = WhisperCLITranscriber.new(cliConfig)
+  else
+    local errorMsg = "Unknown transcriber type: " .. transcriberType
+    obj.logger:error(errorMsg, true)
+    Notifier.show("init", "error", errorMsg)
+    return false
   end
 
-  -- Validate backend
-  local backendValid, validateErr = backendInstance:validate()
-  if not backendValid then
-    local errorMsg = "❌ Backend validation failed: " .. tostring(validateErr)
-    obj.logger:error(errorMsg .. errorSuffix, true)
-    hs.alert.show(errorMsg, 15.0)  -- Show error prominently
-    return
+  -- Validate recorder
+  local ok, err = obj.recorder:validate()
+  if not ok then
+    local errorMsg = "Recorder validation failed: " .. tostring(err)
+    obj.logger:error(errorMsg, true)
+    Notifier.show("init", "error", errorMsg)
+    return false
   end
+  obj.logger:info("✓ Recorder: " .. obj.recorder:getName())
 
-  obj.backendInstance = backendInstance
-  obj.logger:info("✓ Recording backend: " .. obj.recordingBackend .. " (" .. backendInstance:getName() .. ")")
-  hs.alert.show("✓ WhisperDictation ready: " .. obj.recordingBackend .. " + " .. obj.transcriptionMethod, 3.0)
-
-  -- Create transcription method instance
-  local methodConfig = {}
-  if obj.transcriptionMethod == "whisperkitcli" then
-    methodConfig = obj.whisperkitConfig
-  elseif obj.transcriptionMethod == "whispercli" then
-    methodConfig = obj.whispercliConfig
-  elseif obj.transcriptionMethod == "whisperserver" then
-    methodConfig = obj.whisperserverConfig
-  elseif obj.transcriptionMethod == "groq" then
-    methodConfig = obj.groqConfig
+  -- Validate transcriber
+  ok, err = obj.transcriber:validate()
+  if not ok then
+    local errorMsg = "Transcriber validation failed: " .. tostring(err)
+    obj.logger:error(errorMsg, true)
+    Notifier.show("init", "error", errorMsg)
+    return false
   end
+  obj.logger:info("✓ Transcriber: " .. obj.transcriber:getName())
 
-  local methodInstance, methodErr = MethodFactory.create(obj.transcriptionMethod, methodConfig, spoonPath)
-  if not methodInstance then
-    local errorMsg = "❌ Failed to create transcription method: " .. tostring(methodErr)
-    obj.logger:error(errorMsg .. errorSuffix, true)
-    hs.alert.show(errorMsg, 15.0)
-    return
-  end
-
-  -- Validate transcription method
-  local methodValid, methodValidateErr = methodInstance:validate()
-  if not methodValid then
-    local errorMsg = "❌ Transcription method validation failed: " .. tostring(methodValidateErr)
-    obj.logger:error(errorMsg .. errorSuffix, true)
-    hs.alert.show(errorMsg, 15.0)
-    return
-  end
-
-  obj.methodInstance = methodInstance
-  obj.logger:info("✓ Transcription method: " .. obj.transcriptionMethod .. " (" .. methodInstance:getName() .. ")")
-
-  -- Create managers
-  obj.recordingManager = RecordingManager.new(obj.backendInstance, obj.eventBus, {
+  -- Create Manager
+  obj.manager = Manager.new(obj.recorder, obj.transcriber, {
+    language = currentLang(),
     tempDir = obj.tempDir,
   })
 
-  obj.transcriptionManager = TranscriptionManager.new(obj.methodInstance, obj.eventBus, {})
-
-  obj.chunkAssembler = ChunkAssembler.new(obj.eventBus)
-
-  -- Set up event handlers
-  setupEventHandlers()
+  -- Set up state change callback for UI updates
+  obj.manager.onStateChanged = function(newState, oldState, context)
+    if newState == "TRANSCRIBING" then
+      -- Entering transcribing state - stop recording session, show transcribing icon
+      if obj.timer then obj.timer:stop(); obj.timer = nil; end
+      if obj.timeoutTimer then obj.timeoutTimer:stop(); obj.timeoutTimer = nil; end
+      obj.startTime = nil
+      hideRecordingIndicator()
+      updateMenu(obj.icons.transcribing .. " (" .. currentLang() .. ")", "Transcribing...")
+    elseif newState == "IDLE" then
+      -- Entering idle state - reset everything
+      stopRecordingSession()
+      resetMenuToIdle()
+    end
+  end
 
   -- Ensure temp directory exists
   ensureDir(obj.tempDir)
@@ -1200,24 +1200,18 @@ function obj:start()
     obj.menubar:setClickCallback(function() obj:toggleTranscribe() end)
   end
 
-  -- Start server if using whisperserver method
-  if obj.transcriptionMethod == "whisperserver" then
-    obj.logger:info("Starting whisper server...")
-    local started, err = obj:startServer()
-    if not started then
-      obj.logger:warn("Server not started: " .. tostring(err) .. " (will retry on first transcription)")
-    end
-  end
-
   resetMenuToIdle()
-  obj.logger:info("WhisperDictation ready using " .. obj.transcriptionMethod .. " (" .. currentLang() .. ")", true)
+
+  local readyMsg = string.format("WhisperDictation ready: %s + %s",
+    obj.recorder:getName(), obj.transcriber:getName())
+  obj.logger:info(readyMsg, true)
+  Notifier.show("init", "info", readyMsg)
+
+  return true
 end
 
 function obj:stop()
   obj.logger:info("Stopping WhisperDictation")
-
-  -- Stop the whisper transcription server if running
-  obj:stopServer()
 
   if obj.menubar then
     obj.menubar:delete()
@@ -1227,10 +1221,10 @@ function obj:stop()
   obj.hotkeys = {}
   stopRecordingSession()
 
-  -- Clean up refactored components
-  if obj.eventBus then
-    obj.eventBus:offAll()
-  end
+  -- Clean up new architecture components
+  obj.manager = nil
+  obj.recorder = nil
+  obj.transcriber = nil
 
   obj.logger:info("WhisperDictation stopped", true)
 end

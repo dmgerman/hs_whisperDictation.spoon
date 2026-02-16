@@ -5,16 +5,20 @@
 ---
 --- @module SoxRecorder
 
-local IRecorder = dofile("recorders/i_recorder.lua")
+-- Get the spoon directory path from this file's location
+local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
+local IRecorder = dofile(spoonPath .. "i_recorder.lua")
 
 local SoxRecorder = setmetatable({}, {__index = IRecorder})
 SoxRecorder.__index = SoxRecorder
 
 --- Create a new SoxRecorder instance
 ---
---- @param config table Configuration {soxCmd, tempDir}
+--- @param config table Configuration {soxCmd, tempDir, audioInputDevice}
 ---   - soxCmd: Path to sox executable (default: "/opt/homebrew/bin/sox")
 ---   - tempDir: Directory for audio files (default: "/tmp/whisper_dict")
+---   - audioInputDevice: Audio input device name (default: nil = system default)
+---                       Examples: "BlackHole 2ch", "Built-in Microphone"
 --- @return table SoxRecorder instance
 function SoxRecorder.new(config)
   config = config or {}
@@ -22,6 +26,7 @@ function SoxRecorder.new(config)
 
   self.soxCmd = config.soxCmd or "/opt/homebrew/bin/sox"
   self.tempDir = config.tempDir or "/tmp/whisper_dict"
+  self.audioInputDevice = config.audioInputDevice  -- nil = default device
 
   -- Operational state only (NOT recording state - that's in Manager)
   self.task = nil  -- hs.task object when recording
@@ -72,7 +77,17 @@ function SoxRecorder:startRecording(config, onChunk, onError)
   self._onChunk = onChunk
   self._onError = onError
 
-  -- Create sox task: sox -q -d output.wav
+  -- Build sox arguments based on audio input device
+  local soxArgs
+  if self.audioInputDevice then
+    -- Use specified device: sox -q -t coreaudio "device name" output.wav
+    soxArgs = {"-q", "-t", "coreaudio", self.audioInputDevice, audioFile}
+  else
+    -- Use default device: sox -q -d output.wav
+    soxArgs = {"-q", "-d", audioFile}
+  end
+
+  -- Create sox task
   self.task = hs.task.new(
     self.soxCmd,
     function(exitCode, stdOut, stdErr)
@@ -81,7 +96,7 @@ function SoxRecorder:startRecording(config, onChunk, onError)
       -- (_isRecording is managed explicitly in start/stop methods)
       self.task = nil
     end,
-    {"-q", "-d", audioFile}
+    soxArgs
   )
 
   if not self.task then

@@ -12,8 +12,8 @@ Track completion status for each step. Update this section as work progresses.
 | 4    | SoxRecorder - Simple Recording Implementation  | ✅ Complete | 2026-02-15     |
 | 5    | WhisperCLITranscriber - Simple Transcription   | ✅ Complete | 2026-02-15     |
 | 6    | Integration Test - Core Subset End-to-End      | ✅ Complete | 2026-02-15     |
-| 7    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
-| 8    | Dual API Support in init.lua                   | ⬜ Pending  | -              |
+| 7    | New Architecture in init.lua                   | ✅ Complete | 2026-02-15     |
+| 8    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
 | 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending  | -              |
 | 10   | Deprecation Warnings, Full Test Suite, Cleanup | ⬜ Pending  | -              |
 
@@ -1045,6 +1045,31 @@ exit $?
 - `CLAUDE.md` sections on async testing and live Hammerspoon tests
 - This is the first live integration test using the spoon interface
 - All subsequent steps can now use this pattern for live testing
+
+**Note on Step 7 Implementation:**
+- Step 7 implemented new architecture directly in init.lua (no dual API)
+- Old architecture code kept as reference but not used
+- Added audioInputDevice configuration to SoxRecorder for BlackHole support
+- Created audio routing test infrastructure (tests/lib/audio_routing.sh)
+- **Fallback chains deferred to Step 9** - Step 7 validates components but doesn't implement fallbacks yet
+- Integration tests use fixture audio files via BlackHole virtual device
+
+**Step 7 Completion - Bug Fixes and Enhancements (2026-02-15):**
+
+Critical bugs fixed during integration:
+1. **WhisperCLI transcriber** - Fixed output file path handling (whisper-cli appends `.txt` to full filename)
+2. **Manager race condition** - Removed premature `_checkIfComplete()` call in `stopRecording()` that caused early completion before chunks were emitted
+3. **UI freeze bug** - Added `onStateChanged` callback to Manager for menubar updates (RECORDING → 🎙️, TRANSCRIBING → ⏳, IDLE → 🎤)
+4. **Audio device restoration** - Fixed `get_current_input_device()` to use SwitchAudioSource instead of unreliable osascript
+
+Test suite enhancements:
+- Expanded from 21 to 32 tests (+11 tests)
+- Added 4 menubar state validation tests (idle, recording, transcribing, restored)
+- Added second recording cycle (6 tests) to verify state machine reset
+- Added automatic spoon restoration via `hs.reload()` at test end
+- Fixed audio device capture/restore using SwitchAudioSource
+
+**Verification:** All 32 tests passing. System fully functional with proper UI updates and audio device management.
 
 ---
 

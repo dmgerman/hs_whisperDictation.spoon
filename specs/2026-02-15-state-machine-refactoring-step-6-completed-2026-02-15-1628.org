@@ -1,0 +1,284 @@
+#+TITLE: Step 7 Completion Report - New Architecture in init.lua
+#+DATE: 2026-02-15 16:28
+#+AUTHOR: Claude Sonnet 4.5
+
+* Summary
+
+Successfully implemented Step 7: New Architecture in init.lua. The spoon now uses the new Manager-based architecture with callback-style interfaces, replacing the old EventBus/Promise architecture.
+
+** Key Accomplishments
+
+- Integrated new architecture directly into init.lua (no dual API - old code kept as reference only)
+- Added audioInputDevice configuration support to SoxRecorder for virtual audio device testing
+- Created comprehensive audio routing test infrastructure with BlackHole virtual device support
+- Implemented complete integration tests (25 tests, all passing)
+- Created live end-to-end test using fixture audio files via BlackHole
+
+** Work Completed
+
+*** 1. SoxRecorder Audio Device Configuration
+- Added ~audioInputDevice~ parameter to SoxRecorder.new()
+- Supports specifying custom input devices (e.g., "BlackHole 2ch" for tests)
+- Defaults to system default device (nil)
+- Uses CoreAudio driver on macOS: ~sox -t coreaudio "device name" output.wav~
+
+*** 2. init.lua New Architecture Integration
+- Replaced old EventBus/Promise-based start() with new Manager-based implementation
+- Added new configuration structure:
+  - ~obj.config.recorder~ - "sox" (streaming deferred to Step 8)
+  - ~obj.config.transcriber~ - "whispercli"
+  - ~obj.config.sox.audioInputDevice~ - nil = default, or device name
+  - ~obj.config.whispercli~ - executable and modelPath
+- Updated public API methods to use Manager:
+  - ~beginTranscribe()~ - uses Manager:startRecording()
+  - ~endTranscribe()~ - uses Manager:stopRecording()
+  - ~toggleTranscribe()~ - checks Manager.state instead of RecordingManager
+  - ~isRecording()~ - returns Manager.state == "RECORDING"
+- Old architecture code kept as reference but not used
+
+*** 3. Audio Routing Test Infrastructure
+Created ~tests/lib/audio_routing.sh~ (204 lines):
+- ~assert_blackhole_installed()~ - Checks for BlackHole 2ch, fails with install instructions
+- ~setup_virtual_audio()~ - Switches input device to BlackHole
+- ~teardown_virtual_audio()~ - Restores original input device (automatic via trap)
+- ~play_fixture_to_virtual()~ - Plays audio file through BlackHole output/input loopback
+- ~check_audio_tools()~ - Verifies SwitchAudioSource or sox available
+- Automatic cleanup on script exit via trap
+
+*** 4. Integration Tests
+Created ~tests/spec/integration/new_architecture_init_spec.lua~ (321 lines, 25 tests):
+- Configuration tests (4 tests) - Verify new config structure
+- Initialization with valid components (5 tests) - Manager, recorder, transcriber creation
+- Initialization with invalid components (4 tests) - Validation failures
+- Recording lifecycle (4 tests) - Start, stop, toggle, full cycle
+- Error handling (3 tests) - Prevents duplicate starts, invalid state transitions
+- Audio device configuration (3 tests) - Default device, custom device, device passing
+- Cleanup (2 tests) - Manager cleanup, menubar removal
+
+All 25 tests passing!
+
+*** 5. Live End-to-End Test
+Created ~tests/test_new_architecture_e2e.sh~ (194 lines):
+- Uses BlackHole virtual audio device for deterministic testing
+- Tests complete flow: init → configure → start recording → play fixture → stop → transcribe → verify results
+- Verifies:
+  - BlackHole installation and setup
+  - Spoon initialization with new architecture
+  - Manager state transitions (IDLE → RECORDING → TRANSCRIBING → IDLE)
+  - Audio device configuration (BlackHole 2ch)
+  - Audio file creation and validation
+  - Transcription completion and clipboard copy
+  - No errors in console
+- Uses fixture audio files from tests/fixtures/ or tests/data/
+- Automatic cleanup and audio device restoration
+
+** Files Changed
+
+*** Modified Files
+
+| File                                          | Changes             | Description                               |
+|-----------------------------------------------+---------------------+-------------------------------------------|
+| init.lua                                      | +148/-154 (net: -6) | New architecture integration              |
+| recorders/sox_recorder.lua                    | +9/-4 (net: +5)     | Audio device configuration support        |
+| specs/2026-02-15-state-machine-refactoring.md | +7/-5 (net: +2)     | Progress tracking and Step 7 notes        |
+| *Total modified*                              | +164/-163 (net: +1) | Minimal net change (refactoring)          |
+
+*** New Files
+
+| File                                                 | Lines | Description                           |
+|------------------------------------------------------+-------+---------------------------------------|
+| tests/lib/audio_routing.sh                           |   204 | BlackHole audio routing infrastructure |
+| tests/spec/integration/new_architecture_init_spec.lua |   321 | Integration tests (25 tests)          |
+| tests/test_new_architecture_e2e.sh                   |   194 | Live e2e test with BlackHole          |
+| *Total new*                                          |   719 | Test infrastructure                   |
+
+*** Overall Statistics
+
+- Modified: 3 files (+164/-163 lines, net +1)
+- Created: 3 files (+719 lines)
+- Total: 6 files (+883/-163 lines, net +720)
+- Tests added: 25 integration tests (all passing)
+
+** Architecture Changes
+
+*** Configuration Migration
+
+*Old (EventBus/Promise-based):*
+#+begin_src lua
+obj.recordingBackend = "pythonstream"
+obj.transcriptionMethod = "whisperserver"
+#+end_src
+
+*New (Manager/Callback-based):*
+#+begin_src lua
+obj.config = {
+  recorder = "sox",
+  transcriber = "whispercli",
+  sox = {
+    soxCmd = "/opt/homebrew/bin/sox",
+    audioInputDevice = nil,  -- nil = default, or "BlackHole 2ch"
+  },
+  whispercli = {
+    executable = "/opt/homebrew/bin/whisper-cli",
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+  }
+}
+#+end_src
+
+*** Component Flow
+
+*Old Architecture:*
+init.lua → EventBus → RecordingManager → Backend (Promise-based) → TranscriptionManager → Method (Promise-based) → ChunkAssembler → EventBus → UI
+
+*New Architecture:*
+init.lua → Manager → Recorder (callback-based) → Transcriber (callback-based) → Manager → Notifier → UI
+
+** Testing Strategy
+
+*** Three Testing Levels
+
+1. *Unit Tests with Mocks* (Steps 1-6, validated)
+   - Run via busted
+   - No Hammerspoon process required
+   - Synchronous mock behavior
+   - Fast, deterministic
+
+2. *Integration Tests with Real Components* (Step 7, this step)
+   - Run via busted with MockHS
+   - Tests spoon interface with mocks
+   - 25 tests covering initialization, lifecycle, errors
+   - No live Hammerspoon required
+
+3. *Live End-to-End Tests* (Step 7+)
+   - Run via shell scripts
+   - Actual Hammerspoon process running
+   - Real async timing, real APIs
+   - Uses BlackHole for deterministic audio input
+   - Tests through spoon interface: ~hs.loadSpoon("hs_whisperDictation")~
+
+*** BlackHole Virtual Audio Device
+
+**Why BlackHole:**
+- Enables deterministic audio testing with fixture files
+- No actual microphone required
+- Repeatable, automated testing
+- Required for streaming recorder and other backends (Step 8+)
+
+**Installation:**
+#+begin_src bash
+brew install blackhole-2ch
+# Then restart Hammerspoon
+#+end_src
+
+**Usage in Tests:**
+1. Switch input device to BlackHole 2ch
+2. Play fixture audio file through BlackHole output (becomes input)
+3. Recorder captures fixture audio as "microphone" input
+4. Restore original device on cleanup
+
+** Important Notes
+
+*** Fallback Chains Deferred to Step 9
+
+Step 7 implements basic validation (components must exist) but does NOT implement fallback chains. Fallback validation will be added in Step 9:
+- StreamingRecorder → SoxRecorder (if Python unavailable)
+- WhisperKit → WhisperCLI (if not Apple Silicon)
+
+Current behavior: Validation fails if configured component is not available.
+
+*** Old Architecture Kept as Reference
+
+The old EventBus/Promise-based code remains in init.lua but is NOT used:
+- ~obj.recordingBackend~, ~obj.transcriptionMethod~ - old config (ignored)
+- ~obj.eventBus~, ~obj.backendInstance~, ~obj.methodInstance~ - old components (nil)
+- ~setupEventHandlers()~ - old event handlers (not called)
+
+This code is kept for reference during remaining steps but can be removed in Step 10 (cleanup).
+
+*** Audio Device Configuration is Key Improvement
+
+The ~audioInputDevice~ configuration is more than just a testing feature:
+- Users can select their preferred microphone (useful for multi-mic setups)
+- Makes the spoon more flexible and testable
+- Required for BlackHole testing infrastructure
+- Applies to all recorders (SoxRecorder now, StreamingRecorder in Step 8)
+
+** Verification
+
+*** Unit/Integration Tests
+#+begin_src bash
+busted tests/spec/integration/new_architecture_init_spec.lua
+# Result: 25 tests, 0 failures, 0 errors
+#+end_src
+
+*** Live E2E Test (Requires BlackHole)
+#+begin_src bash
+./tests/test_new_architecture_e2e.sh
+# Requires: BlackHole installed, Hammerspoon running, whisper-cli + model
+#+end_src
+
+*** Manual Testing
+#+begin_src lua
+-- Load spoon
+wd = hs.loadSpoon("hs_whisperDictation")
+
+-- Configure (optional - has sensible defaults)
+wd.config.sox.audioInputDevice = "BlackHole 2ch"  -- for testing
+-- wd.config.sox.audioInputDevice = nil  -- use system default
+
+-- Start
+wd:start()  -- Should show: "WhisperDictation ready: sox + WhisperCLI"
+
+-- Check state
+print(wd.manager.state)  -- Should be "IDLE"
+
+-- Toggle recording
+wd:toggle()  -- State: IDLE → RECORDING
+wd:toggle()  -- State: RECORDING → TRANSCRIBING → IDLE
+
+-- Check clipboard
+print(hs.pasteboard.getContents())  -- Should have transcription
+#+end_src
+
+** Next Steps (Step 8)
+
+Step 8 will add:
+- StreamingRecorder (multi-chunk recorder with VAD)
+- Additional transcribers (WhisperKit, Groq, WhisperServer)
+- Integration tests for streaming architecture
+- Live tests for all recorder/transcriber combinations
+
+The audio routing infrastructure and BlackHole setup created in Step 7 will be reused for all Step 8 testing.
+
+** Git Commands
+
+#+begin_src bash
+# Review changes
+git status
+git diff init.lua recorders/sox_recorder.lua
+
+# See new files
+git status --short
+
+# Line counts
+git diff --stat
+wc -l tests/lib/audio_routing.sh \
+      tests/spec/integration/new_architecture_init_spec.lua \
+      tests/test_new_architecture_e2e.sh
+#+end_src
+
+** Completion Checklist
+
+- [X] Add audioInputDevice to SoxRecorder configuration
+- [X] Integrate new architecture into init.lua
+- [X] Update public API (beginTranscribe, endTranscribe, toggle, isRecording)
+- [X] Create audio routing test infrastructure (BlackHole support)
+- [X] Write integration tests (25 tests, all passing)
+- [X] Create live e2e test with fixture audio routing
+- [X] Update plan with Step 7 completion and notes
+- [X] Verify all tests pass
+- [X] Document BlackHole setup and usage
+- [X] Create completion report
+
+** Co-Authored-By
+Claude Sonnet 4.5 <noreply@anthropic.com>
