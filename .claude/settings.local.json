@@ -66,7 +66,8 @@
       "Bash(./tests/test_streaming_recorder_integration.sh:*)",
       "Bash(timeout:*)",
       "Bash(/Users/dmg/.config/dmg/python3.12/bin/python3:*)",
-      "Bash(./tests/test_streaming_simple.sh:*)"
+      "Bash(./tests/test_streaming_simple.sh:*)",
+      "Bash(~/.emacs.d/modules/whisper-cli/build/bin/whisper-server:*)"
     ],
     "deny": [],
     "ask": []

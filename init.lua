@@ -1214,6 +1214,56 @@ function obj:start()
       -- Entering idle state - reset everything
       stopRecordingSession()
       resetMenuToIdle()
+
+      -- Handle auto-paste if enabled and we came from TRANSCRIBING (successful completion)
+      if oldState == "TRANSCRIBING" and obj.shouldPaste then
+        obj.logger:info("Auto-paste enabled, checking conditions...")
+
+        local clipboard = hs.pasteboard.getContents()
+        if not clipboard or clipboard == "" then
+          obj.logger:warn("No clipboard content to paste")
+          obj.shouldPaste = false
+          return
+        end
+
+        -- Check activity monitoring conditions
+        if obj.monitorUserActivity then
+          local c = obj.activityCounts
+          local hasActivity = (c.keys >= 2) or (c.clicks >= 1) or (c.appSwitches >= 1)
+
+          if hasActivity then
+            local summary = getActivitySummary()
+            local msg = "⚠️ Auto-paste blocked: User activity detected (" .. summary .. ")\nText is in clipboard - paste manually (⌘V)"
+            obj.logger:warn(msg, true)
+            hs.alert.show(msg, 10.0)
+            obj.shouldPaste = false
+            return
+          end
+
+          if not isSameAppFocused() then
+            local msg = "⚠️ Auto-paste blocked: Application changed during recording\nText is in clipboard - paste manually (⌘V)"
+            obj.logger:warn(msg, true)
+            hs.alert.show(msg, 10.0)
+            obj.shouldPaste = false
+            return
+          end
+        end
+
+        -- All checks passed - perform auto-paste
+        obj.logger:info("Auto-paste conditions met, pasting...")
+        hs.timer.doAfter(obj.autoPasteDelay, function()
+          local pasteOk, pasteErr = pcall(smartPaste)
+          if not pasteOk then
+            local errMsg = "❌ Paste failed: " .. tostring(pasteErr) .. "\nText is in clipboard - paste manually (⌘V)"
+            obj.logger:error(errMsg, true)
+            hs.alert.show(errMsg, 10.0)
+          else
+            hs.alert.show("✓ Pasted " .. #clipboard .. " chars", 3.0)
+          end
+        end)
+
+        obj.shouldPaste = false
+      end
     end
   end
 
@@ -1250,6 +1300,9 @@ function obj:stop()
   -- Clean up new architecture components
   if obj.recorder and obj.recorder.cleanup then
     obj.recorder:cleanup()
+  end
+  if obj.transcriber and obj.transcriber.cleanup then
+    obj.transcriber:cleanup()
   end
   obj.manager = nil
   obj.recorder = nil

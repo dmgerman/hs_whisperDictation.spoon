@@ -18,6 +18,9 @@ WhisperServerTranscriber.__index = WhisperServerTranscriber
 ---   - host: Server host (default: "127.0.0.1")
 ---   - port: Server port (default: 8080)
 ---   - curlCmd: curl command path (default: "curl")
+---   - executable: Path to whisper-server binary (for auto-start)
+---   - modelPath: Path to whisper model file (for auto-start)
+---   - startupTimeout: Server startup timeout in seconds (default: 10)
 --- @return table WhisperServerTranscriber instance
 function WhisperServerTranscriber.new(config)
   config = config or {}
@@ -26,15 +29,116 @@ function WhisperServerTranscriber.new(config)
   self.host = config.host or "127.0.0.1"
   self.port = config.port or 8080
   self.curlCmd = config.curlCmd or "curl"
+  self.executable = config.executable
+  self.modelPath = config.modelPath
+  self.startupTimeout = config.startupTimeout or 10
+
+  -- Track server process (if we started it)
+  self.serverTask = nil
+  self.serverStartedByUs = false
 
   return self
 end
 
---- Validate that curl is available
+--- Check if server is running
 ---
---- Checks if curl is in PATH. Note: Does not verify server is running.
+--- @return boolean running True if server is responding
+function WhisperServerTranscriber:_isServerRunning()
+  local healthUrl = string.format("http://%s:%s/health", self.host, self.port)
+  local cmd = string.format("%s -s --connect-timeout 2 '%s' >/dev/null 2>&1", self.curlCmd, healthUrl)
+
+  local result = os.execute(cmd)
+  return result == 0 or result == true
+end
+
+--- Start the whisper server
 ---
---- @return boolean success True if transcriber prerequisites are met
+--- @return boolean success True if server started successfully
+--- @return string|nil error Error message if failed
+function WhisperServerTranscriber:_startServer()
+  if not self.executable then
+    return false, "No executable configured for auto-start"
+  end
+
+  if not self.modelPath then
+    return false, "No modelPath configured for auto-start"
+  end
+
+  -- Check if executable exists
+  local execAttrs = hs.fs.attributes(self.executable)
+  if not execAttrs then
+    return false, "Executable not found: " .. self.executable
+  end
+
+  -- Check if model exists
+  local modelAttrs = hs.fs.attributes(self.modelPath)
+  if not modelAttrs then
+    return false, "Model file not found: " .. self.modelPath
+  end
+
+  print("[WhisperServerTranscriber] Starting server: " .. self.executable)
+  print("[WhisperServerTranscriber] Model: " .. self.modelPath)
+  print("[WhisperServerTranscriber] Port: " .. self.port)
+
+  -- Start server using hs.task (async, non-blocking)
+  self.serverTask = hs.task.new(
+    self.executable,
+    nil,  -- no completion callback needed (server runs indefinitely)
+    function(task, stdout, stderr)
+      -- Stream callback for server output
+      if stdout and stdout ~= "" then
+        print("[WhisperServer] " .. stdout)
+      end
+      if stderr and stderr ~= "" then
+        print("[WhisperServer] " .. stderr)
+      end
+      return true  -- Continue streaming
+    end,
+    {
+      "--host", self.host,
+      "--port", tostring(self.port),
+      "--model", self.modelPath,
+    }
+  )
+
+  if not self.serverTask:start() then
+    self.serverTask = nil
+    return false, "Failed to start server task"
+  end
+
+  self.serverStartedByUs = true
+
+  -- Wait for server to become ready (up to startupTimeout seconds)
+  local maxWait = self.startupTimeout
+  local checkInterval = 0.5
+  local waited = 0
+
+  while waited < maxWait do
+    hs.timer.usleep(checkInterval * 1000000)  -- Convert to microseconds
+
+    if self:_isServerRunning() then
+      print("[WhisperServerTranscriber] ✓ Server ready after " .. waited .. "s")
+      return true, nil
+    end
+
+    waited = waited + checkInterval
+  end
+
+  -- Timeout - server didn't become ready
+  if self.serverTask then
+    self.serverTask:terminate()
+    self.serverTask = nil
+  end
+  self.serverStartedByUs = false
+
+  return false, "Server failed to start within " .. maxWait .. "s"
+end
+
+--- Validate that prerequisites are met and server is running
+---
+--- Checks curl availability and ensures server is running (auto-starts if needed).
+---
+--- @return boolean success True if transcriber is ready
 --- @return string|nil error Error message if validation failed
 function WhisperServerTranscriber:validate()
   -- Check if curl is available
@@ -50,7 +154,28 @@ function WhisperServerTranscriber:validate()
     return false, "curl not found"
   end
 
-  return true, nil
+  -- Check if server is running
+  if self:_isServerRunning() then
+    print("[WhisperServerTranscriber] ✓ Server already running")
+    return true, nil
+  end
+
+  -- Server not running - try to auto-start if configured
+  if self.executable then
+    print("[WhisperServerTranscriber] Server not running, attempting auto-start...")
+    local ok, err = self:_startServer()
+    if not ok then
+      return false, "Server auto-start failed: " .. tostring(err)
+    end
+    return true, nil
+  end
+
+  -- No auto-start configured and server not running
+  return false, string.format(
+    "Server not running on %s:%s and no executable configured for auto-start",
+    self.host,
+    self.port
+  )
 end
 
 --- Transcribe an audio file
@@ -168,6 +293,18 @@ end
 function WhisperServerTranscriber:supportsLanguage(lang)
   -- Whisper server supports all Whisper languages
   return true
+end
+
+--- Clean up resources (stop server if we started it)
+---
+--- Should be called when spoon is stopped/unloaded.
+function WhisperServerTranscriber:cleanup()
+  if self.serverTask and self.serverStartedByUs then
+    print("[WhisperServerTranscriber] Stopping server (pid: " .. tostring(self.serverTask:pid()) .. ")")
+    self.serverTask:terminate()
+    self.serverTask = nil
+    self.serverStartedByUs = false
+  end
 end
 
 return WhisperServerTranscriber

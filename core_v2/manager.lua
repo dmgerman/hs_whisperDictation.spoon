@@ -373,8 +373,14 @@ function Manager:_finalize()
     Notifier.show("transcription", "info", "Transcription complete: " .. finalText)
   end
 
-  -- Transition back to IDLE
-  self:transitionTo(Manager.STATES.IDLE, "finalize")
+  -- Transition back to IDLE (only if in valid state)
+  -- RECORDING -> IDLE is invalid (stopRecording will handle transition to TRANSCRIBING)
+  -- TRANSCRIBING -> IDLE is valid
+  -- ERROR -> IDLE is valid
+  if self.state == Manager.STATES.TRANSCRIBING or self.state == Manager.STATES.ERROR then
+    self:transitionTo(Manager.STATES.IDLE, "finalize")
+  end
+  -- If still in RECORDING state, don't transition - stopRecording() will handle it
 end
 
 --- Assemble results from all chunks

@@ -157,6 +157,29 @@ describe("New Architecture - Basic Flow (Mocks)", function()
 
       assert.is_true(hasCompletionMessage, "Should show completion message")
     end)
+
+    it("should complete without any state transition errors", function()
+      manager:startRecording("en")
+      manager:stopRecording()
+
+      -- Verify recording completed successfully
+      assert.equals(Manager.STATES.IDLE, manager.state)
+
+      -- Check that NO error-level alerts were shown
+      local alerts = MockHS.alert._getAlerts()
+      for _, alert in ipairs(alerts) do
+        -- Check for invalid state transition errors
+        assert.is_false(
+          alert.message:match("Invalid state transition") ~= nil,
+          "Should not have invalid state transition: " .. alert.message
+        )
+        -- Check for recording:error category
+        assert.is_false(
+          alert.message:match("%[recording:error%]") ~= nil,
+          "Should not have recording errors: " .. alert.message
+        )
+      end
+    end)
   end)
 
   describe("Full Recording Session (Multiple Chunks)", function()
