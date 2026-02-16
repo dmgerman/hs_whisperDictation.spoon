@@ -386,7 +386,7 @@ describe("WhisperCLITranscriber", function()
     local manager
 
     before_each(function()
-      Manager = dofile("core_v2/manager.lua")
+      Manager = dofile("core/manager.lua")
       MockRecorder = dofile("tests/mocks/mock_recorder.lua")
 
       -- Register files for validation

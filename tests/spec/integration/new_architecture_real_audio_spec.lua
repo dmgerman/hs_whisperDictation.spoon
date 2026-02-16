@@ -17,7 +17,7 @@ _G.hs = MockHS
 local Fixtures = require("tests.helpers.fixtures")
 
 -- Load new architecture components
-local Manager = dofile(spoonPath .. "core_v2/manager.lua")
+local Manager = dofile(spoonPath .. "core/manager.lua")
 local SoxRecorder = dofile(spoonPath .. "recorders/sox_recorder.lua")
 local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
 local MockTranscriber = dofile(spoonPath .. "tests/mocks/mock_transcriber.lua")

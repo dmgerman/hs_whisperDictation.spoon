@@ -9,7 +9,7 @@ local mock_hs = require("tests.helpers.mock_hs")
 -- Mock Hammerspoon before loading modules
 _G.hs = mock_hs
 
-local Manager = dofile("core_v2/manager.lua")
+local Manager = dofile("core/manager.lua")
 local MockRecorder = dofile("tests/mocks/mock_recorder.lua")
 local MockTranscriber = dofile("tests/mocks/mock_transcriber.lua")
 

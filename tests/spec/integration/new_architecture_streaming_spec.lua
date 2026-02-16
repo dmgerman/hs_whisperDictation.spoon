@@ -15,7 +15,7 @@ describe("New Architecture - StreamingRecorder Integration", function()
     MockHS = require("tests.helpers.mock_hs")
     _G.hs = MockHS
 
-    Manager = require("core_v2.manager")
+    Manager = require("core.manager")
     StreamingRecorder = require("recorders.streaming.streaming_recorder")
     MockTranscriber = require("tests.mocks.mock_transcriber")
 

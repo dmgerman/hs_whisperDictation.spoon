@@ -49,6 +49,9 @@ function StreamingRecorder.new(config)
   self._currentLang = nil  -- Current language for chunk routing
   self._onChunk = nil  -- Stored callback for chunks
   self._onError = nil  -- Stored error callback
+  self._onComplete = nil  -- Stored completion callback
+  self._completionTimer = nil  -- Timeout timer for completion
+  self._recordingComplete = false  -- Track if recording has stopped
 
   return self
 end
@@ -324,9 +327,20 @@ function StreamingRecorder:_handleServerEvent(event, lang)
       self._onChunk(event.audio_file, event.chunk_num, event.is_final)
     end
 
+    -- If this is the final chunk AND recording has stopped, trigger completion
+    if event.is_final and self._recordingComplete then
+      self:_triggerCompletion()
+    end
+
   elseif eventType == "recording_stopped" then
     print("[StreamingRecorder] Recording stopped by server")
     self._isRecording = false
+
+    -- If recording was stopped (stopRecording called) and no final chunk received yet,
+    -- trigger completion now (handles zero-chunk case)
+    if self._recordingComplete and self._onComplete then
+      self:_triggerCompletion()
+    end
 
   elseif eventType == "error" then
     print("[StreamingRecorder] Server error: " .. tostring(event.error))
@@ -443,6 +457,14 @@ function StreamingRecorder:startRecording(config, onChunk, onError)
     return false, "Already recording"
   end
 
+  -- Clear any pending completion callbacks from previous recording
+  if self._completionTimer then
+    self._completionTimer:stop()
+    self._completionTimer = nil
+  end
+  self._onComplete = nil
+  self._recordingComplete = false
+
   local lang = config.lang
   self._currentLang = lang
   self._chunkCount = 0
@@ -498,17 +520,44 @@ function StreamingRecorder:stopRecording(onComplete, onError)
 
   -- Clear recording flag immediately
   self._isRecording = false
+  self._recordingComplete = true
+
+  -- Store completion callback - will be called when:
+  -- 1. Final chunk (is_final=true) arrives, OR
+  -- 2. recording_stopped event arrives (handles zero-chunk case), OR
+  -- 3. Timeout expires (fallback)
+  self._onComplete = onComplete
 
   print("[StreamingRecorder] ✓ Stop command sent")
 
-  -- Server will send chunk_ready events with final chunk
-  -- onComplete callback handled by server events
-
-  if onComplete then
-    onComplete()
+  -- Set timeout fallback in case server events never arrive
+  -- This prevents hanging if server crashes or connection is lost
+  if hs and hs.timer then
+    self._completionTimer = hs.timer.doAfter(10, function()
+      print("[StreamingRecorder] ⚠️ Completion timeout - server events did not arrive")
+      self:_triggerCompletion()
+    end)
   end
 
   return true, nil
+end
+
+--- Trigger completion callback (called when recording is truly complete)
+---
+--- @private
+function StreamingRecorder:_triggerCompletion()
+  -- Cancel timeout timer if it exists
+  if self._completionTimer then
+    self._completionTimer:stop()
+    self._completionTimer = nil
+  end
+
+  -- Call completion callback if set
+  local callback = self._onComplete
+  if callback then
+    self._onComplete = nil  -- Clear before calling to prevent double-call
+    callback()
+  end
 end
 
 --- Shutdown the server and cleanup resources
@@ -537,12 +586,20 @@ function StreamingRecorder:cleanup()
     self.serverProcess = nil
   end
 
+  -- Clear completion timer
+  if self._completionTimer then
+    self._completionTimer:stop()
+    self._completionTimer = nil
+  end
+
   -- Clear state
   self._isRecording = false
+  self._recordingComplete = false
   self._currentLang = nil
   self._chunkCount = 0
   self._onChunk = nil
   self._onError = nil
+  self._onComplete = nil
 
   print("[StreamingRecorder] ✓ Cleanup complete")
   return true

@@ -644,7 +644,7 @@ function obj:start()
   obj.logger:info("Starting WhisperDictation v2")
 
   -- Load new architecture components
-  local Manager = dofile(spoonPath .. "core_v2/manager.lua")
+  local Manager = dofile(spoonPath .. "core/manager.lua")
   local Notifier = dofile(spoonPath .. "lib/notifier.lua")
 
   -- ============================================================================

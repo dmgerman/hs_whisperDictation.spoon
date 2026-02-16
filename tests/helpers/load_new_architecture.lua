@@ -23,7 +23,7 @@ end
 SoxRecorder = loadComponent("recorders/sox_recorder.lua")
 MockTranscriber = loadComponent("tests/mocks/mock_transcriber.lua")
 MockRecorder = loadComponent("tests/mocks/mock_recorder.lua")
-Manager = loadComponent("core_v2/manager.lua")
+Manager = loadComponent("core/manager.lua")
 Notifier = loadComponent("lib/notifier.lua")
 
 -- Return success indicator

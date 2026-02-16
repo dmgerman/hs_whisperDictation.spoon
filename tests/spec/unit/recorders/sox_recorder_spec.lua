@@ -492,7 +492,7 @@ describe("SoxRecorder", function()
     local manager
 
     before_each(function()
-      Manager = dofile("core_v2/manager.lua")
+      Manager = dofile("core/manager.lua")
       MockTranscriber = dofile("tests/mocks/mock_transcriber.lua")
 
       manager = Manager.new(

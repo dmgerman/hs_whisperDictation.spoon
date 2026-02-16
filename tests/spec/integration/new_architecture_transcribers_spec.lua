@@ -18,7 +18,7 @@ describe("New Architecture - Additional Transcribers Integration", function()
     _G.hs = MockHS
 
     -- Load components
-    Manager = dofile("core_v2/manager.lua")
+    Manager = dofile("core/manager.lua")
     WhisperKitTranscriber = dofile("transcribers/whisperkit_transcriber.lua")
     WhisperServerTranscriber = dofile("transcribers/whisperserver_transcriber.lua")
     MockRecorder = dofile("tests/mocks/mock_recorder.lua")
