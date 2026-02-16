@@ -67,7 +67,9 @@
       "Bash(timeout:*)",
       "Bash(/Users/dmg/.config/dmg/python3.12/bin/python3:*)",
       "Bash(./tests/test_streaming_simple.sh:*)",
-      "Bash(~/.emacs.d/modules/whisper-cli/build/bin/whisper-server:*)"
+      "Bash(~/.emacs.d/modules/whisper-cli/build/bin/whisper-server:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
