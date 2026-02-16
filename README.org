@@ -1,8 +1,23 @@
 #+title: WhisperDictation - Voice to Text for Mac
 #+author: dmg
-#+date: 2025
+#+date: 2026
 
 Speak and see your words appear as text. Works offline, supports 100+ languages, and puts privacy first.
+
+* ⚠️ Version 2.0 - Rearchitected
+
+*This version has been completely rearchitected* for better reliability and maintainability:
+- New callback-based architecture (simpler, more testable)
+- Improved error handling and state management
+- 408+ comprehensive tests
+
+*Breaking changes from v1.x:*
+- Configuration API changed (see examples below)
+- =recordingBackend= → =config.recorder=
+- =transcriptionMethod= → =config.transcriber=
+- =pythonstream= → =streaming=
+
+If upgrading from v1.x, you'll need to update your configuration.
 
 * What Does It Do?
 
@@ -19,16 +34,17 @@ That's it!
 
 Pick based on what you value most:
 
-*** 🚀 *Fast & Simple* (Cloud API - Recommended for Beginners)
+*** 🔒 *Private & Offline* (Apple Silicon Macs - Recommended)
 
 #+begin_src lua
 -- Add to ~/.hammerspoon/init.lua
-hs.loadSpoon("hs_whisperDictation")
+local wd = hs.loadSpoon("hs_whisperDictation")
 
 -- Configure
-wd.transcriptionMethod = "groq"  -- Fast cloud API
-wd.groqApiKey = "your-api-key-here"  -- Get free key from groq.com
-wd.recordingBackend = "sox"  -- Simple recording
+wd.config = {
+  recorder = "sox",           -- Simple recording
+  transcriber = "whisperkit", -- Apple optimized, local
+}
 
 -- Set your hotkey (Ctrl+Cmd+D)
 wd:bindHotKeys({
@@ -38,40 +54,24 @@ wd:bindHotKeys({
 wd:start()
 #+end_src
 
-*Install:* =brew install sox=
-
-*Pros:* Super fast, easy setup, always works
-
-*Cons:* Requires internet, sends audio to Groq (privacy trade-off)
-
-*** 🔒 *Private & Offline* (Apple Silicon Macs Only)
-
-#+begin_src lua
-hs.loadSpoon("hs_whisperDictation")
-
-wd.transcriptionMethod = "whisperkit"  -- Apple optimized
-wd.recordingBackend = "sox"
-
-wd:bindHotKeys({
-  toggle = {{"ctrl", "cmd"}, "d"}
-})
-
-wd:start()
-#+end_src
-
 *Install:* =brew install sox whisperkit-cli=
 
-*Pros:* 100% private, offline, Apple Silicon optimized
+*Pros:* 100% private, offline, Apple Silicon optimized, fast
 
-*Cons:* Slower than cloud, requires Mac with M1/M2/M3 chip
+*Cons:* Requires Mac with M1/M2/M3/M4 chip
 
-*** ⚡ *Pro Setup* (Real-time, Smart Chunking)
+*** ⚡ *Pro Setup* (Fastest Transcription)
 
 #+begin_src lua
-hs.loadSpoon("hs_whisperDictation")
+local wd = hs.loadSpoon("hs_whisperDictation")
 
-wd.recordingBackend = "pythonstream"  -- Smart recording
-wd.transcriptionMethod = "groq"  -- Fast transcription
+wd.config = {
+  recorder = "streaming",        -- Smart recording with VAD
+  transcriber = "whisperserver", -- Fastest transcription
+  whisperserver = {
+    port = "8080"
+  }
+}
 
 wd:bindHotKeys({
   toggle = {{"ctrl", "cmd"}, "d"}
@@ -83,13 +83,22 @@ wd:start()
 *Install:*
 
 #+begin_src bash
-brew install sox  # Fallback
-pip install sounddevice scipy torch  # Python backend
+# Install whisper.cpp server
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+make server
+./models/download-ggml-model.sh large-v3
+
+# Run server (in background)
+./server -m models/ggml-large-v3.bin -p 8080 &
+
+# Install streaming recorder
+pip install sounddevice scipy torch
 #+end_src
 
-*Pros:* Real-time chunk transcription, intelligent silence detection
+*Pros:* Fastest transcription, real-time chunk processing, intelligent silence detection
 
-*Cons:* More setup required
+*Cons:* Significant memory usage (model stays in RAM), more complex setup
 
 ** 2. Set Your Language
 
@@ -163,38 +172,20 @@ wd:bindHotKeys({
 
 *Usage:* Press *Ctrl+Cmd+L*, choose language, then record
 
-* Transcription Methods Explained
+* Transcription Methods
 
-** groq (Cloud API)
+| Method        | What it is                       | Speed      | Privacy    | Best for                       |
+|---------------+----------------------------------+------------+------------+--------------------------------|
+| *whisperkit*    | Apple Neural Engine on your Mac  | ⚡⚡ Fast  | 100% local | Privacy-conscious Mac users    |
+| *whispercli*    | Whisper on CPU/GPU               | ⚡ Slower  | 100% local | Non-Apple Silicon Macs         |
+| *whisperserver* | Local HTTP server (model in RAM) | ⚡⚡ Fast* | 100% local | Heavy users (*after first use) |
 
-*What it is:* Sends audio to Groq's servers for transcription
+** whisperkit (Apple Silicon - Recommended)
 
-*Speed:* ⚡⚡⚡ Very fast (1-2 seconds)
-
-*Privacy:* Audio leaves your Mac
-
-*Cost:* Free tier available
-
-*Best for:* Speed and convenience
-
-*Setup:*
-
-#+begin_src lua
-wd.transcriptionMethod = "groq"
-wd.groqApiKey = "gsk_..."  -- Get from groq.com
-#+end_src
-
-** whisperkit (Apple Silicon)
-
-*What it is:* Uses Apple's Neural Engine on your Mac
-
-*Speed:* ⚡⚡ Fast (3-5 seconds)
-
-*Privacy:* 100% local, nothing leaves your Mac
-
-*Cost:* Free
-
-*Best for:* Privacy-conscious Mac users
+| What it is | Uses Apple's Neural Engine on your Mac               |
+| Speed      | ⚡⚡ Fast                                              |
+| Privacy    | 100% local, nothing leaves your Mac                  |
+| Best for   | Privacy-conscious Mac users with Apple Silicon       |
 
 *Setup:*
 
@@ -203,20 +194,17 @@ brew install whisperkit-cli
 #+end_src
 
 #+begin_src lua
-wd.transcriptionMethod = "whisperkit"
+wd.config = {
+  transcriber = "whisperkit",
+}
 #+end_src
 
 ** whispercli (CPU/GPU)
 
-*What it is:* Runs Whisper on your CPU/GPU
-
-*Speed:* ⚡ Slower (10-30 seconds)
-
-*Privacy:* 100% local
-
-*Cost:* Free
-
-*Best for:* Non-Apple Silicon Macs
+| What it is | Runs Whisper on your CPU/GPU                         |
+| Speed      | ⚡ Slower                                             |
+| Privacy    | 100% local                                           |
+| Best for   | Non-Apple Silicon Macs                               |
 
 *Setup:*
 
@@ -229,27 +217,56 @@ wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 #+end_src
 
 #+begin_src lua
-wd.transcriptionMethod = "whispercli"
-wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+wd.config = {
+  transcriber = "whispercli",
+  whispercli = {
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+  }
+}
 #+end_src
 
 ** whisperserver (HTTP Server)
 
-*What it is:* Local HTTP server (model stays loaded)
+| What it is | Local HTTP server (model stays loaded in RAM)       |
+| Speed      | ⚡⚡ Fast after first use                             |
+| Privacy    | 100% local                                           |
+| Best for   | Heavy users (model stays in RAM between uses)        |
 
-*Speed:* ⚡⚡ Fast after first use
+*Setup:*
 
-*Privacy:* 100% local
+#+begin_src bash
+# Install whisper.cpp server
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+make server
 
-*Cost:* Free
+# Download model
+./models/download-ggml-model.sh large-v3
 
-*Best for:* Heavy users (model stays in RAM)
+# Run server (in background)
+./server -m models/ggml-large-v3.bin -p 8080 &
+#+end_src
 
-*Setup:* See [[file:docs/SERVER_SETUP.md][Server Setup Guide]]
+#+begin_src lua
+wd.config = {
+  transcriber = "whisperserver",
+  whisperserver = {
+    host = "127.0.0.1",
+    port = "8080"
+  }
+}
+#+end_src
 
-* Recording Backends Explained
+* Recording Backends
 
-** sox (Simple)
+| Backend   | What it is                          | When to use                     |
+|-----------+-------------------------------------+---------------------------------|
+| *sox*       | Records one file per session        | Simple needs, fallback option   |
+| *streaming* | Real-time with smart chunking (VAD) | Long dictations, faster results |
+
+*streaming* is in beta-testing. *sox* should be used if you want utmost reliability.
+
+** sox (Simple - Recommended for Beginners)
 
 *What it is:* Records one file per session
 
@@ -258,12 +275,14 @@ wd.transcriptionMethods.whispercli.config.modelPath = "/usr/local/whisper/ggml-l
 *Install:* =brew install sox=
 
 #+begin_src lua
-wd.recordingBackend = "sox"
+wd.config = {
+  recorder = "sox",
+}
 #+end_src
 
-** pythonstream (Smart)
+** streaming (Smart - Advanced)
 
-*What it is:* Real-time recording with smart chunking
+*What it is:* Real-time recording with smart chunking using Silero VAD
 
 *Features:*
 - Detects silence and creates chunks automatically
@@ -272,14 +291,22 @@ wd.recordingBackend = "sox"
 
 *When to use:* Long dictations, want faster results
 
-*Install:*
+*Note: streaming* is in beta-testing. *sox* should be used if you want utmost reliability.
+
 
 #+begin_src bash
 pip install sounddevice scipy torch
 #+end_src
 
 #+begin_src lua
-wd.recordingBackend = "pythonstream"
+wd.config = {
+  recorder = "streaming",
+  streaming = {
+    silenceThreshold = 2.0,   -- Seconds of silence before chunk split
+    minChunkDuration = 3.0,   -- Minimum chunk length
+    maxChunkDuration = 600.0, -- Maximum chunk length
+  }
+}
 #+end_src
 
 * Configuration Reference
@@ -301,33 +328,56 @@ wd.timeoutSeconds = 1800  -- Auto-stop after 30 minutes (nil = no limit)
 wd.showRecordingIndicator = true  -- Show red dot while recording
 #+end_src
 
-** Transcription Method Settings
+** Transcriber Configuration
 
 #+begin_src lua
--- Groq
-wd.groqApiKey = "gsk_..."
-wd.groqModel = "whisper-large-v3"  -- or "whisper-large-v3-turbo"
+wd.config = {
+  transcriber = "whisperkit",  -- or "whispercli" or "whisperserver"
 
--- WhisperKit
-wd.transcriptionMethods.whisperkitcli.config.model = "large-v3"
+  -- WhisperKit settings
+  whisperkit = {
+    cmd = "/opt/homebrew/bin/whisperkit-cli",
+    model = "large-v3",
+  },
 
--- Whisper CLI
-wd.transcriptionMethods.whispercli.config.modelPath = "/path/to/model.bin"
+  -- Whisper CLI settings
+  whispercli = {
+    executable = "/opt/homebrew/bin/whisper-cli",
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+  },
 
--- Whisper Server
-wd.serverConfig.port = 8080
-wd.serverConfig.host = "127.0.0.1"
+  -- Whisper Server settings
+  whisperserver = {
+    host = "127.0.0.1",
+    port = "8080",
+    curlCmd = "/usr/bin/curl",
+  },
+}
 #+end_src
 
-** Recording Backend Settings
+** Recorder Configuration
 
 #+begin_src lua
--- Python Stream
-wd.pythonstreamConfig = {
-  port = 12341,
-  silenceThreshold = 2.0,   -- Seconds of silence before chunk split
-  minChunkDuration = 3.0,   -- Minimum chunk length
-  maxChunkDuration = 600.0, -- Maximum chunk length
+wd.config = {
+  recorder = "streaming",  -- or "sox"
+
+  -- Sox settings
+  sox = {
+    soxCmd = "/opt/homebrew/bin/sox",
+    audioInputDevice = nil,  -- nil = default device
+    tempDir = nil,           -- nil = use wd.tempDir
+  },
+
+  -- Streaming settings
+  streaming = {
+    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+    tcpPort = 12341,
+    audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
+    silenceThreshold = 2.0,  -- Seconds of silence to trigger chunk boundary
+    minChunkDuration = 3.0,  -- Minimum chunk duration (seconds)
+    maxChunkDuration = 600.0, -- Maximum chunk duration (seconds)
+    tempDir = nil,           -- nil = use wd.tempDir
+  },
 }
 #+end_src
 
@@ -355,7 +405,7 @@ wd.pasteWithEmacsYank = false   -- Use Ctrl-Y for Emacs (if true)
 2. Play recording: =afplay /tmp/whisper_dict/en-*.wav | tail -1=
 3. If silent, check microphone in System Settings
 
-** "Python stream server won't start"
+** "Streaming server won't start"
 
 *Fix:*
 
@@ -426,60 +476,118 @@ end)
 
 * Recommended Configurations
 
-** Best for Beginners
+** Best for Beginners (Apple Silicon)
 
 #+begin_src lua
-wd.transcriptionMethod = "groq"
-wd.groqApiKey = "your-key"
-wd.recordingBackend = "sox"
+wd.config = {
+  recorder = "sox",
+  transcriber = "whisperkit",
+}
 #+end_src
 
-** Best for Privacy
+** Best for Privacy (Apple Silicon)
 
 #+begin_src lua
-wd.transcriptionMethod = "whisperkit"  -- Apple Silicon only
-wd.recordingBackend = "sox"
+wd.config = {
+  recorder = "sox",
+  transcriber = "whisperkit",
+}
 #+end_src
 
-** Best for Speed (Privacy Trade-off)
+** Best for Speed & Long Recordings (Apple Silicon)
 
 #+begin_src lua
-wd.transcriptionMethod = "groq"
-wd.recordingBackend = "pythonstream"
+wd.config = {
+  recorder = "streaming",
+  transcriber = "whisperkit",
+}
+#+end_src
+
+** Best for Non-Apple Silicon Macs
+
+#+begin_src lua
+wd.config = {
+  recorder = "sox",
+  transcriber = "whispercli",
+  whispercli = {
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
+  }
+}
 #+end_src
 
 ** Best for Heavy Users (Local, Fast)
 
 #+begin_src lua
-wd.transcriptionMethod = "whisperserver"
-wd.recordingBackend = "pythonstream"
+wd.config = {
+  recorder = "streaming",
+  transcriber = "whisperserver",
+  whisperserver = {
+    port = "8080"
+  }
+}
 #+end_src
 
-* Getting Help
+** My own
 
-1. Check this README
-2. Check [[file:docs/TROUBLESHOOTING.md][Common Issues]]
-3. Enable debug mode: =wd.logger:setLevel("DEBUG")= then check Hammerspoon Console
-4. Open an issue with:
-   - Your configuration
-   - Output of =wd:getStatus()=
-   - Relevant console logs
+- I keep both the recorder and transcriber in memory (after first use).
+
+#+begin_src lua   :exports both
+  dmg_all_keys = {"cmd", "alt", "ctrl"}
+
+  local wd = hs.loadSpoon("hs_whisperDictation")
+  wd.languages = {"en", "ja", "es"}
+  wd.monitorUserActivity = true
+  wd.pasteWithEmacsYank = true
+
+  -- New Architecture (v2) configuration
+  wd.config.recorder = 'streaming'  -- Use StreamingRecorder with Python server
+  wd.config.transcriber = 'whisperserver'  -- Use WhisperServer transcriber
+
+  -- Configure StreamingRecorder
+  wd.config.streaming = {
+    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+    audioInputDevice = nil,  -- nil = default device
+    silenceThreshold = 3.0,  -- 3 seconds of silence to trigger chunk
+    minChunkDuration = 5.0,  -- 5 seconds minimum before chunking
+    maxChunkDuration = 600.0,  -- 10 minutes maximum
+    perfectSilenceDuration = 0,  -- 0 = disabled (don't stop on silence at startup)
+    tcpPort = 12341,
+  }
+
+  -- Configure WhisperServer transcriber
+  wd.config.whisperserver = {
+    executable = os.getenv("HOME") .. "/.emacs.d/modules/whisper-cli/build/bin/whisper-server",
+    modelPath = "/usr/local/whisper/ggml-model.bin",  -- Update this path to your actual model
+    host = "127.0.0.1",
+    port = 8080,
+    startupTimeout = 10,
+  }
+
+  wd:bindHotKeys({
+      toggle = {dmg_all_keys, "l"},
+      togglePaste = {{}, "F15"},
+      nextLang = {dmg_all_keys, ";"},
+      retranscribe = {dmg_all_keys, "'"},
+  })
+
+  wd:start()
+
+#+end_src
 
 * Privacy & Security
 
 *What stays on your Mac:*
 - All configurations
 - All recordings (in =/tmp/whisper_dict/=)
-- When using local methods (whisperkit, whispercli, whisperserver)
+- All transcriptions (100% local processing)
 
 *What leaves your Mac:*
-- Audio files when using Groq (sent to Groq's servers)
-- Nothing else - no telemetry, no tracking
+- Nothing - no telemetry, no tracking, no cloud services
 
 *To maximize privacy:*
-- Use =whisperkit= or =whispercli= transcription method
-- Use =sox= or =pythonstream= recording backend
-- Audio stays 100% local
+- Use =whisperkit= or =whispercli= transcription
+- Use =sox= or =streaming= recording backend
+- Audio stays 100% local, always
 
 * License
 
@@ -487,7 +595,6 @@ MIT License - See LICENSE file
 
 * For Developers
 
-- [[file:docs/ARCHITECTURE.md][Architecture Documentation]]
-- [[file:docs/API.md][API Documentation]]
-- [[file:docs/TESTING.md][Testing Guide]]
-- [[file:docs/CONTRIBUTING.md][Contributing]]
+- [[file:docs/architecture.md][Architecture Documentation]] - Current v2.0 architecture
+- [[file:docs/testing.md][Testing Guide]] - 408+ tests
+- [[file:recorders/streaming/whisper_stream.md][Streaming Recorder Documentation]] - Python VAD server
