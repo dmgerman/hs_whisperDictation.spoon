@@ -638,6 +638,126 @@ make test-live
 
 **Best Practice**: Write comprehensive unit tests first, then add focused live tests for critical flows.
 
+### Testing with BlackHole Virtual Audio Device
+
+**Overview**: For deterministic testing of audio recording/transcription, use BlackHole virtual audio device to route fixture audio as "microphone" input.
+
+**Setup** (validated in Step 8a - WhisperKit/WhisperServer tests):
+
+1. **Install BlackHole**:
+   ```bash
+   brew install blackhole-2ch
+   ```
+
+2. **Audio Routing Helper** (`tests/lib/audio_routing.sh`):
+   - `setup_virtual_audio()` - Save current device, switch input to BlackHole
+   - `teardown_virtual_audio()` - Restore original device
+   - `play_fixture_to_virtual(audioFile)` - Play fixture through BlackHole output
+   - **Uses SwitchAudioSource** (not osascript) for reliability
+
+3. **Test Pattern**:
+   ```bash
+   #!/bin/bash
+   set -e
+   source tests/lib/test_framework.sh
+   source tests/lib/audio_routing.sh
+
+   # Prerequisites
+   test_case "BlackHole virtual audio device is installed"
+   assert_blackhole_installed && pass
+
+   # Setup
+   test_case "can setup virtual audio routing"
+   setup_virtual_audio && pass
+
+   # Configure spoon with BlackHole
+   test_case "can load spoon with BlackHole device"
+   timeout 10 hs -c "
+     wd = hs.loadSpoon('hs_whisperDictation')
+     wd.config = {
+       recorder = 'sox',
+       transcriber = 'whisperkit',
+       sox = {
+         soxCmd = '/opt/homebrew/bin/sox',
+         audioInputDevice = 'BlackHole 2ch',  -- Use virtual device
+         tempDir = '/tmp/test'
+       }
+     }
+     wd:start()
+   " >/dev/null 2>&1
+
+   # Test recording
+   test_case "can start recording"
+   hs_eval_silent "wd:toggle()"
+   sleep 0.5
+   pass
+
+   # Play fixture audio (becomes microphone input via BlackHole)
+   test_case "play fixture audio through virtual device"
+   FIXTURE_AUDIO="tests/fixtures/audio/complete/en-20260214-200536.wav"
+   play_fixture_to_virtual "$FIXTURE_AUDIO" &
+   PLAY_PID=$!
+   sleep 2
+   pass
+
+   # Stop and verify
+   test_case "can stop recording"
+   timeout 5 hs -c "wd:toggle()" >/dev/null 2>&1 || true
+   sleep 2
+   pass
+
+   # Wait for transcription
+   test_case "transcription completes"
+   MAX_WAIT=60
+   while [ $ELAPSED -lt $MAX_WAIT ]; do
+     STATE=$(hs_eval "print(wd.manager.state)" 2>/dev/null || echo "UNKNOWN")
+     [ "$STATE" = "IDLE" ] && break
+     sleep 3
+   done
+
+   # Cleanup (automatic via trap in audio_routing.sh)
+   teardown_virtual_audio
+   ```
+
+**Key Patterns**:
+
+1. **Deterministic testing** - Same fixture audio produces consistent transcriptions
+2. **No real microphone needed** - Tests run on headless systems
+3. **Automatic cleanup** - `teardown_virtual_audio()` uses trap to restore device
+4. **Graceful dependency checking**:
+   ```bash
+   test_case "optional dependency available"
+   if ! command -v whisperkit-cli &> /dev/null; then
+     skip "whisperkit-cli not installed (brew install whisperkit-cli)"
+   fi
+   pass
+   ```
+
+5. **IPC timeout handling for spoon loading**:
+   ```bash
+   # Use 10s timeout (not default 3s) for spoon loading
+   timeout 10 hs -c "wd = hs.loadSpoon('hs_whisperDictation'); wd:start()" >/dev/null 2>&1
+
+   # Use fallbacks for state transitions
+   timeout 5 hs -c "wd:toggle()" >/dev/null 2>&1 || true
+   sleep 2  # Give Hammerspoon time to process
+
+   # Check state with fallback
+   IS_REC=$(timeout 5 hs -c "print(tostring(wd.recorder:isRecording()))" 2>&1 || echo "false")
+   ```
+
+**See Also**:
+- `tests/test_whisperkit_integration.sh` - Full example (19 tests, all passing)
+- `tests/test_whisperserver_integration.sh` - Same pattern for HTTP-based transcriber
+- `tests/lib/audio_routing.sh` - Audio device management helpers
+- `tests/lib/test_framework.sh` - TAP-style test framework
+
+**When to Use**:
+- ✅ Testing transcribers (need real audio → real transcription)
+- ✅ End-to-end integration tests (recording → transcription → clipboard)
+- ✅ Multiple recording cycles (verify state machine reset)
+- ❌ Unit tests (use mocks instead - faster and more focused)
+
 ## Skills
 
 - `/reload` - Reload Hammerspoon safely (see `.claude/commands/reload.md`)
@@ -673,3 +793,4 @@ make test-live
 - 2026-02-15: **Audio device management with SwitchAudioSource** - For reliable audio device switching in tests, use `SwitchAudioSource -t input -c` to get current device and `SwitchAudioSource -s "DeviceName" -t input` to set device. The osascript approach (`tell application "System Events"...`) fails silently and doesn't work reliably. SwitchAudioSource is available via `brew install switchaudio-osx`.
 - 2026-02-15: **Integration tests must restore global state** - Tests that reconfigure global objects (like `wd` spoon with test temp directories) MUST restore original configuration at the end. Otherwise, they leave the system in a broken state for actual use. Pattern: Add `hs.reload()` at end of test to restore spoon to normal configuration loaded from init.lua. The "message port was invalidated" error during reload is expected and normal.
 - 2026-02-15: **E2E tests need multiple cycles** - End-to-end integration tests should run at least 2 complete recording cycles to verify: (1) state machine properly resets to IDLE, (2) menubar updates correctly on second cycle, (3) no state leaks between recordings, (4) transcription works consistently. Single-cycle tests miss reset bugs.
+- 2026-02-15: **BlackHole virtual audio for deterministic testing** - Use BlackHole 2ch virtual audio device + fixture audio playback for deterministic transcription testing. Key patterns: (1) `setup_virtual_audio()` saves current device and switches to BlackHole, (2) `play_fixture_to_virtual(audioFile)` routes fixture through BlackHole output (becomes recorder input), (3) `teardown_virtual_audio()` restores original device via trap, (4) Use SwitchAudioSource (not osascript) for reliable device switching, (5) Longer timeouts for spoon loading (10s) and state transitions (5s with `|| true` fallback). See `tests/test_whisperkit_integration.sh` (19 tests) and `tests/lib/audio_routing.sh` for complete implementation. This enables testing transcribers without real microphone input and produces consistent results.

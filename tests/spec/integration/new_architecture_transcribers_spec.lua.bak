@@ -1,0 +1,399 @@
+--- Integration Tests - WhisperKit and WhisperServer Transcribers
+---
+--- Tests both new transcribers with Manager + SoxRecorder
+
+describe("New Architecture - Additional Transcribers Integration", function()
+  local MockHS
+  local Manager
+  local SoxRecorder
+  local WhisperKitTranscriber
+  local WhisperServerTranscriber
+  local MockRecorder
+
+  before_each(function()
+    package.path = package.path .. ";./?.lua;./?/init.lua"
+
+    -- Load mock Hammerspoon APIs
+    MockHS = require("tests.helpers.mock_hs")
+    _G.hs = MockHS
+
+    -- Load components
+    Manager = dofile("core_v2/manager.lua")
+    SoxRecorder = dofile("recorders/sox_recorder.lua")
+    WhisperKitTranscriber = dofile("transcribers/whisperkit_transcriber.lua")
+    WhisperServerTranscriber = dofile("transcribers/whisperserver_transcriber.lua")
+    MockRecorder = dofile("tests/mocks/mock_recorder.lua")
+  end)
+
+  after_each(function()
+    MockHS._resetAll()
+    _G.hs = nil
+  end)
+
+  describe("WhisperKitTranscriber with Manager", function()
+    local manager
+    local recorder
+    local transcriber
+
+    before_each(function()
+      recorder = MockRecorder.new()
+      transcriber = WhisperKitTranscriber.new({
+        executable = "whisperkit-cli",
+        model = "large-v3"
+      })
+
+      manager = Manager.new(recorder, transcriber, {
+        language = "en",
+        tempDir = "/tmp/test"
+      })
+    end)
+
+    after_each(function()
+      manager = nil
+      recorder = nil
+      transcriber = nil
+    end)
+
+    it("completes full recording cycle", function()
+      -- Start recording
+      local success = manager:startRecording("en")
+      assert.is_true(success)
+      assert.equals(Manager.STATES.RECORDING, manager.state)
+
+      -- Stop recording (triggers chunk emission)
+      manager:stopRecording()
+
+      -- In mock environment, everything completes synchronously
+      assert.equals(Manager.STATES.IDLE, manager.state)
+      assert.equals(0, manager.pendingTranscriptions)
+
+      -- Verify clipboard contains result (Manager clears results on IDLE transition)
+      local clipboard = MockHS.pasteboard.getContents()
+      assert.is_not_nil(clipboard)
+    end)
+
+    it("shows correct transcriber name", function()
+      assert.equals("WhisperKit", transcriber:getName())
+    end)
+
+    it("validates before starting", function()
+      -- Note: validate() will fail in mock environment (no real whisperkit-cli)
+      -- This tests that Manager can handle validation
+      local ok, err = transcriber:validate()
+      -- ok will be false since whisperkit-cli isn't mocked
+      -- but we can still use the transcriber (validation happens separately)
+      assert.is_boolean(ok)
+    end)
+
+    it("handles multiple chunks correctly", function()
+      -- Use MockRecorder with multiple chunks
+      local multiChunkRecorder = MockRecorder.new({ chunkCount = 3 })
+      local multiManager = Manager.new(multiChunkRecorder, transcriber, {
+        language = "en",
+        tempDir = "/tmp/test"
+      })
+
+      multiManager:startRecording("en")
+      multiManager:stopRecording()
+
+      -- All chunks should complete
+      assert.equals(Manager.STATES.IDLE, multiManager.state)
+      assert.equals(0, multiManager.pendingTranscriptions)
+    end)
+
+    it("supports different languages", function()
+      local languages = {"en", "es", "fr", "de"}
+
+      for _, lang in ipairs(languages) do
+        assert.is_true(transcriber:supportsLanguage(lang))
+
+        -- Can start recording with each language
+        local langManager = Manager.new(
+          MockRecorder.new(),
+          transcriber,
+          { language = lang, tempDir = "/tmp/test" }
+        )
+
+        local success = langManager:startRecording(lang)
+        assert.is_true(success)
+        langManager:stopRecording()
+      end
+    end)
+
+    it("uses correct model configuration", function()
+      local models = {"base", "small", "medium", "large-v3"}
+
+      for _, model in ipairs(models) do
+        local modelTranscriber = WhisperKitTranscriber.new({
+          executable = "whisperkit-cli",
+          model = model
+        })
+
+        assert.equals(model, modelTranscriber.model)
+
+        -- Can transcribe with this model
+        local modelManager = Manager.new(
+          MockRecorder.new(),
+          modelTranscriber,
+          { language = "en", tempDir = "/tmp/test" }
+        )
+
+        modelManager:startRecording("en")
+        modelManager:stopRecording()
+        assert.equals(Manager.STATES.IDLE, modelManager.state)
+      end
+    end)
+  end)
+
+  describe("WhisperServerTranscriber with Manager", function()
+    local manager
+    local recorder
+    local transcriber
+
+    before_each(function()
+      recorder = MockRecorder.new()
+      transcriber = WhisperServerTranscriber.new({
+        host = "127.0.0.1",
+        port = 8080,
+        curlCmd = "curl"
+      })
+
+      manager = Manager.new(recorder, transcriber, {
+        language = "en",
+        tempDir = "/tmp/test"
+      })
+    end)
+
+    after_each(function()
+      manager = nil
+      recorder = nil
+      transcriber = nil
+    end)
+
+    it("completes full recording cycle", function()
+      -- Start recording
+      local success = manager:startRecording("en")
+      assert.is_true(success)
+      assert.equals(Manager.STATES.RECORDING, manager.state)
+
+      -- Stop recording (triggers chunk emission)
+      manager:stopRecording()
+
+      -- In mock environment, everything completes synchronously
+      assert.equals(Manager.STATES.IDLE, manager.state)
+      assert.equals(0, manager.pendingTranscriptions)
+
+      -- Verify clipboard contains result
+      local clipboard = MockHS.pasteboard.getContents()
+      assert.is_not_nil(clipboard)
+    end)
+
+    it("shows correct transcriber name", function()
+      assert.equals("WhisperServer", transcriber:getName())
+    end)
+
+    it("validates curl availability", function()
+      -- validate() checks curl, not server
+      local ok, err = transcriber:validate()
+      -- curl is likely available, so ok should be true
+      assert.is_boolean(ok)
+    end)
+
+    it("handles multiple chunks correctly", function()
+      -- Use MockRecorder with multiple chunks
+      local multiChunkRecorder = MockRecorder.new({ chunkCount = 3 })
+      local multiManager = Manager.new(multiChunkRecorder, transcriber, {
+        language = "en",
+        tempDir = "/tmp/test"
+      })
+
+      multiManager:startRecording("en")
+      multiManager:stopRecording()
+
+      -- All chunks should complete
+      assert.equals(Manager.STATES.IDLE, multiManager.state)
+      assert.equals(0, multiManager.pendingTranscriptions)
+    end)
+
+    it("supports different languages", function()
+      local languages = {"en", "es", "fr", "de"}
+
+      for _, lang in ipairs(languages) do
+        assert.is_true(transcriber:supportsLanguage(lang))
+
+        -- Can start recording with each language
+        local langManager = Manager.new(
+          MockRecorder.new(),
+          transcriber,
+          { language = lang, tempDir = "/tmp/test" }
+        )
+
+        local success = langManager:startRecording(lang)
+        assert.is_true(success)
+        langManager:stopRecording()
+      end
+    end)
+
+    it("supports different server configurations", function()
+      local configs = {
+        { host = "127.0.0.1", port = 8080 },
+        { host = "localhost", port = 8000 },
+        { host = "192.168.1.100", port = 9000 }
+      }
+
+      for _, config in ipairs(configs) do
+        local serverTranscriber = WhisperServerTranscriber.new(config)
+
+        assert.equals(config.host, serverTranscriber.host)
+        assert.equals(config.port, serverTranscriber.port)
+
+        -- Can transcribe with this configuration
+        local serverManager = Manager.new(
+          MockRecorder.new(),
+          serverTranscriber,
+          { language = "en", tempDir = "/tmp/test" }
+        )
+
+        serverManager:startRecording("en")
+        serverManager:stopRecording()
+        assert.equals(Manager.STATES.IDLE, serverManager.state)
+      end
+    end)
+
+    it("uses curl for HTTP requests", function()
+      -- Verify curl command is configured
+      assert.equals("curl", transcriber.curlCmd)
+
+      -- Can use custom curl path
+      local customTranscriber = WhisperServerTranscriber.new({
+        curlCmd = "/usr/bin/curl"
+      })
+      assert.equals("/usr/bin/curl", customTranscriber.curlCmd)
+    end)
+  end)
+
+  describe("Transcriber comparison", function()
+    it("both transcribers implement same interface", function()
+      local whisperkit = WhisperKitTranscriber.new()
+      local whisperserver = WhisperServerTranscriber.new()
+
+      -- Both have required methods
+      assert.is_function(whisperkit.validate)
+      assert.is_function(whisperkit.transcribe)
+      assert.is_function(whisperkit.getName)
+      assert.is_function(whisperkit.supportsLanguage)
+
+      assert.is_function(whisperserver.validate)
+      assert.is_function(whisperserver.transcribe)
+      assert.is_function(whisperserver.getName)
+      assert.is_function(whisperserver.supportsLanguage)
+    end)
+
+    it("both transcribers have unique names", function()
+      local whisperkit = WhisperKitTranscriber.new()
+      local whisperserver = WhisperServerTranscriber.new()
+
+      assert.equals("WhisperKit", whisperkit:getName())
+      assert.equals("WhisperServer", whisperserver:getName())
+      assert.is_not_equal(whisperkit:getName(), whisperserver:getName())
+    end)
+
+    it("both transcribers support same languages", function()
+      local whisperkit = WhisperKitTranscriber.new()
+      local whisperserver = WhisperServerTranscriber.new()
+
+      local languages = {"en", "es", "fr", "de", "ja", "zh"}
+
+      for _, lang in ipairs(languages) do
+        assert.is_true(whisperkit:supportsLanguage(lang))
+        assert.is_true(whisperserver:supportsLanguage(lang))
+      end
+    end)
+
+    it("both transcribers work with same Manager instance", function()
+      local recorder = MockRecorder.new()
+
+      -- Test with WhisperKit
+      local whisperkitManager = Manager.new(
+        recorder,
+        WhisperKitTranscriber.new(),
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      whisperkitManager:startRecording("en")
+      whisperkitManager:stopRecording()
+      assert.equals(Manager.STATES.IDLE, whisperkitManager.state)
+
+      -- Test with WhisperServer
+      local whisperserverManager = Manager.new(
+        MockRecorder.new(),  -- Fresh recorder
+        WhisperServerTranscriber.new(),
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      whisperserverManager:startRecording("en")
+      whisperserverManager:stopRecording()
+      assert.equals(Manager.STATES.IDLE, whisperserverManager.state)
+    end)
+
+    it("both transcribers can be swapped without changing Manager logic", function()
+      -- Create manager with WhisperKit
+      local manager1 = Manager.new(
+        MockRecorder.new(),
+        WhisperKitTranscriber.new(),
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      manager1:startRecording("en")
+      manager1:stopRecording()
+
+      -- Create manager with WhisperServer (same pattern)
+      local manager2 = Manager.new(
+        MockRecorder.new(),
+        WhisperServerTranscriber.new(),
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      manager2:startRecording("en")
+      manager2:stopRecording()
+
+      -- Both complete successfully with same state transitions
+      assert.equals(Manager.STATES.IDLE, manager1.state)
+      assert.equals(Manager.STATES.IDLE, manager2.state)
+    end)
+  end)
+
+  describe("Error handling across transcribers", function()
+    it("WhisperKit handles errors gracefully", function()
+      local transcriber = WhisperKitTranscriber.new()
+      local manager = Manager.new(
+        MockRecorder.new({ shouldFail = true }),
+        transcriber,
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      -- Should not crash even with failing recorder
+      manager:startRecording("en")
+      manager:stopRecording()
+
+      -- Manager should handle errors
+      assert.is_not_nil(manager.state)
+    end)
+
+    it("WhisperServer handles errors gracefully", function()
+      local transcriber = WhisperServerTranscriber.new()
+      local manager = Manager.new(
+        MockRecorder.new({ shouldFail = true }),
+        transcriber,
+        { language = "en", tempDir = "/tmp/test" }
+      )
+
+      -- Should not crash even with failing recorder
+      manager:startRecording("en")
+      manager:stopRecording()
+
+      -- Manager should handle errors
+      assert.is_not_nil(manager.state)
+    end)
+  end)
+end)

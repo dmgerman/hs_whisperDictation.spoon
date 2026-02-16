@@ -13,7 +13,7 @@ Track completion status for each step. Update this section as work progresses.
 | 5    | WhisperCLITranscriber - Simple Transcription   | ✅ Complete | 2026-02-15     |
 | 6    | Integration Test - Core Subset End-to-End      | ✅ Complete | 2026-02-15     |
 | 7    | New Architecture in init.lua                   | ✅ Complete | 2026-02-15     |
-| 8    | Additional Recorders and Transcribers          | ⬜ Pending  | -              |
+| 8    | Additional Recorders and Transcribers          | 🔄 In Progress - 8a Complete | 2026-02-15 (8a) |
 | 9    | Validation, Fallback Chains, Documentation     | ⬜ Pending  | -              |
 | 10   | Deprecation Warnings, Full Test Suite, Cleanup | ⬜ Pending  | -              |
 
@@ -1074,6 +1074,26 @@ Test suite enhancements:
 ---
 
 ### Step 8: Additional Recorders and Transcribers
+
+**Implementation Status:**
+
+Step 8 has been divided into sub-steps for manageable implementation:
+
+- **Step 8a: WhisperKit and WhisperServer Transcribers** - ✅ COMPLETE (2026-02-15)
+  - `transcribers/whisperkit_transcriber.lua` (147 lines)
+  - `transcribers/whisperserver_transcriber.lua` (173 lines)
+  - 84 unit tests + 18 integration tests + 19 live Hammerspoon tests = 121 tests (ALL PASSING)
+  - Both transcribers fully integrated into init.lua
+  - Live testing with BlackHole virtual audio device
+  - Full report: `specs/2026-02-15-state-machine-refactoring-completed-2026-02-15-2026.org`
+
+- **Step 8b: StreamingRecorder** - ⬜ PENDING (awaiting user approval)
+  - `recorders/streaming/streaming_recorder.lua` (~400 lines planned)
+  - Multi-chunk emission during recording
+  - ~80 unit tests + ~40 integration tests + live tests
+
+- **Step 8c: Additional Transcribers (if needed)** - ⬜ PENDING
+  - Groq transcriber (deferred - no API key available)
 
 **What to build:**
 

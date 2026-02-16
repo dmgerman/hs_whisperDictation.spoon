@@ -49,7 +49,19 @@
       "Bash(TEST_AUDIO=\"/Users/dmg/.hammerspoon/Spoons/hs_whisperDictation.spoon/tests/fixtures/audio/complete/en-20260214-200536.wav\")",
       "Bash(OUTPUT_BASE=\"/tmp/test_absolute_output\")",
       "Bash(grep:*)",
-      "Bash(/opt/homebrew/bin/whisper-cli:*)"
+      "Bash(/opt/homebrew/bin/whisper-cli:*)",
+      "Bash(./tests/test_whisperkit_integration.sh)",
+      "Bash(bash -x test_whisperkit_integration.sh)",
+      "Bash(timeout 20 bash:*)",
+      "Bash(source tests/lib/test_framework.sh)",
+      "Bash(hs_eval_silent:*)",
+      "Bash(clear_console)",
+      "Bash(get_recent_console:*)",
+      "Bash(pgrep:*)",
+      "Bash(timeout 30 bash:*)",
+      "Bash(bash -c '\nset -e\necho \"\"Starting...\"\"\necho \"\"Background test\"\" &\nBG_PID=$!\necho \"\"PID: $BG_PID\"\"\nsleep 1\necho \"\"About to wait...\"\"\nwait $BG_PID 2>/dev/null || true\necho \"\"After wait\"\"\necho \"\"Done\"\"\n')",
+      "Bash(timeout 120 /tmp/test_no_errexit.sh:*)",
+      "Bash(/tmp/minimal_test.sh)"
     ],
     "deny": [],
     "ask": []

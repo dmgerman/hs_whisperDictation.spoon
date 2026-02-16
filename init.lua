@@ -96,8 +96,8 @@ obj.langIndex = 1
 -- NEW ARCHITECTURE CONFIGURATION
 -- Configuration for new architecture (callback-based, no EventBus/Promises)
 obj.config = {
-  recorder = "sox",  -- "sox" or "streaming" (streaming not implemented in Step 7)
-  transcriber = "whispercli",  -- "whispercli" only in Step 7
+  recorder = "sox",  -- "sox" or "streaming" (streaming not implemented yet)
+  transcriber = "whispercli",  -- "whispercli", "whisperkit", or "whisperserver"
 
   -- Recorder-specific configs
   sox = {
@@ -1142,6 +1142,14 @@ function obj:start()
     local WhisperCLITranscriber = dofile(spoonPath .. "transcribers/whispercli_transcriber.lua")
     local cliConfig = obj.config.whispercli or {}
     obj.transcriber = WhisperCLITranscriber.new(cliConfig)
+  elseif transcriberType == "whisperkit" then
+    local WhisperKitTranscriber = dofile(spoonPath .. "transcribers/whisperkit_transcriber.lua")
+    local kitConfig = obj.config.whisperkit or {}
+    obj.transcriber = WhisperKitTranscriber.new(kitConfig)
+  elseif transcriberType == "whisperserver" then
+    local WhisperServerTranscriber = dofile(spoonPath .. "transcribers/whisperserver_transcriber.lua")
+    local serverConfig = obj.config.whisperserver or {}
+    obj.transcriber = WhisperServerTranscriber.new(serverConfig)
   else
     local errorMsg = "Unknown transcriber type: " .. transcriberType
     obj.logger:error(errorMsg, true)
