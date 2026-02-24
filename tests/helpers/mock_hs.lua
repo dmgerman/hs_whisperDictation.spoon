@@ -289,6 +289,18 @@ MockHS.fs = {
   _unregisterFile = function(filepath)
     state.fs_files[filepath] = nil
   end,
+
+  _registerDirectory = function(dirpath, files)
+    -- Register a directory with files
+    -- files is array of filenames (not full paths)
+    for _, filename in ipairs(files or {}) do
+      local fullpath = dirpath .. "/" .. filename
+      -- Register with default attrs if not already registered
+      if not state.fs_files[fullpath] then
+        MockHS.fs._registerFile(fullpath, { mode = "file", size = 1000 })
+      end
+    end
+  end,
 }
 
 --- hs.socket - TCP sockets
@@ -594,6 +606,98 @@ MockHS.menubar = {
       setMenu = function() end,
       delete = function() end,
     }
+  end,
+}
+
+--- hs.fnutils - Functional utilities
+MockHS.fnutils = {
+  copy = function(tbl)
+    if type(tbl) ~= "table" then return tbl end
+    local copy = {}
+    for k, v in pairs(tbl) do
+      copy[k] = type(v) == "table" and MockHS.fnutils.copy(v) or v
+    end
+    return copy
+  end,
+
+  map = function(tbl, fn)
+    local result = {}
+    for k, v in pairs(tbl) do
+      result[k] = fn(v)
+    end
+    return result
+  end,
+
+  filter = function(tbl, fn)
+    local result = {}
+    for k, v in pairs(tbl) do
+      if fn(v) then
+        result[k] = v
+      end
+    end
+    return result
+  end,
+}
+
+--- hs.window - Window management
+MockHS.window = {
+  _focusedWindow = nil,
+
+  focusedWindow = function()
+    return MockHS.window._focusedWindow
+  end,
+
+  _setFocusedWindow = function(window)
+    MockHS.window._focusedWindow = window
+  end,
+}
+
+--- hs.chooser - Selection chooser
+MockHS.chooser = {
+  new = function(completionFn)
+    local chooser = {
+      _callback = completionFn,
+      _choices = {},
+      _shown = false,
+    }
+
+    function chooser:choices(choices)
+      self._choices = choices or {}
+      return self
+    end
+
+    function chooser:show()
+      self._shown = true
+      -- In tests, chooser shows but doesn't block
+      -- Tests can call _select() or _cancel() to simulate user action
+      return self
+    end
+
+    function chooser:hide()
+      self._shown = false
+      return self
+    end
+
+    function chooser:delete()
+      self._shown = false
+      return self
+    end
+
+    -- Test helper to simulate selection
+    function chooser:_select(index)
+      if self._callback and self._choices[index] then
+        self._callback(self._choices[index])
+      end
+    end
+
+    -- Test helper to simulate cancellation
+    function chooser:_cancel()
+      if self._callback then
+        self._callback(nil)
+      end
+    end
+
+    return chooser
   end,
 }
 

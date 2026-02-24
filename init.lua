@@ -145,10 +145,15 @@ obj.monitorUserActivity = false
 obj.autoPasteDelay = 0.1
 obj.pasteWithEmacsYank = false
 
+-- Retranscription settings
+obj.retranscribeTranscriber = nil  -- Transcriber to use for retranscription (nil = use current)
+obj.retranscribeCount = 10  -- Number of recent recordings to show in chooser
+
 -- Default hotkeys
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
+  -- retranscribe = {{"ctrl", "cmd"}, "r"},  -- Uncomment to enable retranscription hotkey
 }
 
 -- ============================================================================
@@ -242,6 +247,9 @@ obj.shouldPaste = false
 
 -- Callback state
 obj.transcriptionCallback = nil
+
+-- Retranscription state
+obj.retranscribeStartingApp = nil  -- Tracks app where chooser was opened for auto-paste
 
 -- ============================================================================
 -- === Helper Functions ===
@@ -463,6 +471,184 @@ local function smartPaste()
 end
 
 -- ============================================================================
+-- === Retranscription Helpers ===
+-- ============================================================================
+
+--- Format recording entry for chooser display
+--- @param recording table Recording info with path, filename, modified, size
+--- @return table Chooser entry with text, subText, path
+local function formatRecordingEntry(recording)
+  -- Format timestamp as readable date
+  local dateStr = os.date("%b %d, %Y %H:%M:%S", recording.modified)
+
+  -- Format file size in MB
+  local sizeMB = string.format("%.2f MB", recording.size / 1024 / 1024)
+
+  -- Create chooser entry
+  return {
+    text = dateStr,
+    subText = recording.filename .. " (" .. sizeMB .. ")",
+    path = recording.path,
+  }
+end
+
+--- Handle retranscription result (success or error)
+--- @param success boolean Whether transcription succeeded
+--- @param textOrError string Transcribed text or error message
+--- @param callback function|nil Optional callback to call with result
+local function handleRetranscriptionResult(success, textOrError, callback)
+  -- Load Notifier
+  local Notifier = dofile(spoonPath .. "lib/notifier.lua")
+
+  -- Reset menubar to idle
+  resetMenuToIdle()
+
+  if not success then
+    -- Show error
+    Notifier.show("transcription", "error", "Retranscription failed: " .. tostring(textOrError))
+    obj.retranscribeStartingApp = nil
+    return
+  end
+
+  -- Success!
+  if callback then
+    -- User provided callback - call it with result
+    callback(textOrError)
+  else
+    -- No callback - handle via clipboard/paste
+    -- Copy to clipboard first
+    hs.pasteboard.setContents(textOrError)
+
+    -- Check if should auto-paste
+    local shouldAutoPaste = false
+    if obj.retranscribeStartingApp then
+      local focusedWindow = hs.window.focusedWindow()
+      local currentApp = focusedWindow and focusedWindow:application()
+
+      if currentApp and currentApp:bundleID() == obj.retranscribeStartingApp:bundleID() then
+        shouldAutoPaste = true
+      end
+    end
+
+    if shouldAutoPaste then
+      -- Auto-paste
+      hs.timer.doAfter(obj.autoPasteDelay, function()
+        smartPaste()
+        Notifier.show("transcription", "info", "Retranscription pasted")
+      end)
+    else
+      -- Just clipboard
+      Notifier.show("transcription", "info", "Retranscription copied to clipboard")
+    end
+  end
+
+  -- Reset state
+  obj.retranscribeStartingApp = nil
+end
+
+--- Perform retranscription of audio file
+--- @param audioFile string Path to audio file
+--- @param callback function|nil Optional callback for result
+local function retranscribe(audioFile, callback)
+  -- Load Notifier
+  local Notifier = dofile(spoonPath .. "lib/notifier.lua")
+
+  -- Determine which transcriber to use
+  local transcriber = nil
+  local transcriberName = ""
+
+  if obj.retranscribeTranscriber then
+    -- Create new transcriber instance
+    transcriberName = obj.retranscribeTranscriber
+
+    local transcriberFile = spoonPath .. "transcribers/" .. transcriberName .. "_transcriber.lua"
+    local transcriberConfig = obj.config[transcriberName] or {}
+
+    -- Load transcriber
+    local ok, TranscriberClass = pcall(dofile, transcriberFile)
+    if not ok then
+      Notifier.show("transcription", "error", "Failed to load transcriber: " .. transcriberName)
+      obj.retranscribeStartingApp = nil
+      return
+    end
+
+    -- Create instance
+    transcriber = TranscriberClass.new(transcriberConfig)
+
+    -- Validate
+    local valid, err = transcriber:validate()
+    if not valid then
+      Notifier.show("transcription", "error", "Transcriber validation failed: " .. tostring(err))
+      obj.retranscribeStartingApp = nil
+      return
+    end
+  else
+    -- Use current transcriber
+    transcriber = obj.transcriber
+    transcriberName = transcriber:getName()
+  end
+
+  -- Get current language
+  local lang = currentLang()
+
+  -- Show alert and update menubar
+  Notifier.show("transcription", "info", "Re-transcribing with " .. transcriberName .. " (" .. lang .. ")...")
+  updateMenu(obj.icons.transcribing .. " Re-transcribing...", "Re-transcribing with " .. transcriberName)
+
+  -- Start transcription
+  transcriber:transcribe(audioFile, lang,
+    function(text)
+      -- Success
+      handleRetranscriptionResult(true, text, callback)
+    end,
+    function(error)
+      -- Error
+      handleRetranscriptionResult(false, error, callback)
+    end
+  )
+end
+
+--- Show chooser with recent recordings
+--- @param callback function|nil Optional callback for transcription result
+local function showRetranscribeChooser(callback)
+  -- Load Notifier
+  local Notifier = dofile(spoonPath .. "lib/notifier.lua")
+
+  -- Get recent recordings
+  local recordings = getRecentRecordings(obj.retranscribeCount)
+
+  if #recordings == 0 then
+    -- No recordings found
+    Notifier.show("recording", "warning", "No recent recordings found in " .. obj.tempDir)
+    return
+  end
+
+  -- Track starting app for auto-paste
+  local focusedWindow = hs.window.focusedWindow()
+  obj.retranscribeStartingApp = focusedWindow and focusedWindow:application()
+
+  -- Build chooser choices
+  local choices = {}
+  for _, recording in ipairs(recordings) do
+    table.insert(choices, formatRecordingEntry(recording))
+  end
+
+  -- Create chooser
+  local chooser = hs.chooser.new(function(choice)
+    if choice then
+      -- File selected - retranscribe it
+      retranscribe(choice.path, callback)
+    else
+      -- Cancelled
+      obj.retranscribeStartingApp = nil
+    end
+  end)
+
+  chooser:choices(choices)
+  chooser:show()
+end
+
+-- ============================================================================
 -- === Recording Session Management ===
 -- ============================================================================
 
@@ -630,6 +816,23 @@ end
 -- Alias for backwards compatibility and convenience
 function obj:toggle(callbackOrPaste)
   return self:toggleTranscribe(callbackOrPaste)
+end
+
+--- Re-transcribe a recent recording
+--- Shows a chooser with recent recordings from tempDir
+--- @param callback function|nil Optional callback to receive transcription result
+--- @return self For method chaining
+function obj:transcribeLatestAgain(callback)
+  -- Validate spoon is started
+  if not self.manager then
+    self.logger:warn("Cannot retranscribe: spoon not started. Call :start() first.", true)
+    return self
+  end
+
+  -- Show chooser with recent recordings
+  showRetranscribeChooser(callback)
+
+  return self
 end
 
 function obj:isRecording()
@@ -937,6 +1140,9 @@ function obj:bindHotKeys(mapping)
     elseif name == "nextLang" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select whisper language for transcription [Audio]", showLanguageChooser)
       obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
+    elseif name == "retranscribe" then
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Retranscribe recent recording [Audio]", function() obj:transcribeLatestAgain() end)
+      obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self

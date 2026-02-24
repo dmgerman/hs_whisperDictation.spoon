@@ -349,6 +349,59 @@ wd:start()
 2. Place in `transcribers/your_transcriber.lua`
 3. Add factory logic in `init.lua`
 
+## Retranscription Feature
+
+The retranscription feature allows users to re-transcribe previously recorded audio files with a different transcriber or to retry failed transcriptions.
+
+### How It Works
+
+1. User triggers retranscription (via hotkey or API call)
+2. System scans `obj.tempDir` for recent .wav files
+3. Displays `hs.chooser` with formatted entries (date/time, file size in MB)
+4. User selects file
+5. System transcribes using configured transcriber with current language setting:
+   - If `obj.retranscribeTranscriber` is set: create new instance of that transcriber
+   - If nil: use current transcriber (`obj.transcriber`)
+6. Result handled based on context:
+   - Callback provided: call callback with result
+   - Same app: auto-paste result
+   - Different app: copy to clipboard
+
+### Transcriber Selection
+
+Two modes:
+- **Current transcriber** (default): Uses `obj.transcriber` already initialized
+- **Specific transcriber**: Creates new instance of specified transcriber
+
+This allows flexibility - e.g., normal recording uses WhisperCLI, retranscription uses WhisperKit for higher accuracy.
+
+### Language Handling
+
+Always uses `currentLang()` - the currently selected language from the language dropdown. The original recording's language (from filename) is ignored. This simplifies the user experience and ensures consistency with the current workflow.
+
+### Auto-Paste Logic
+
+Tracks starting app when chooser opens (`obj.retranscribeStartingApp`). If same app when retranscription completes, auto-pastes. Otherwise, copies to clipboard only. This provides intelligent behavior without requiring user configuration.
+
+### Implementation Details
+
+**Helper Functions:**
+- `getRecentRecordings(n)` - Scan tempDir, sort by mtime, return top N
+- `formatRecordingEntry(recording)` - Format for chooser (date/time, size in MB)
+- `showRetranscribeChooser(callback)` - Display chooser, track app
+- `retranscribe(audioFile, callback)` - Perform retranscription
+- `handleRetranscriptionResult(success, textOrError, callback)` - Handle result with auto-paste
+
+**Public API:**
+- `obj:transcribeLatestAgain(callback)` - Entry point, returns self for chaining
+
+**Configuration:**
+- `obj.retranscribeTranscriber = nil` - Which transcriber to use (nil = current)
+- `obj.retranscribeCount = 10` - Number of recent recordings to show
+
+**Hotkey:**
+- `retranscribe` - Bound via `bindHotKeys()`
+
 ## Lessons Learned
 
 ### Critical Bugs Fixed

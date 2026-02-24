@@ -172,6 +172,42 @@ wd:bindHotKeys({
 
 *Usage:* Press *Ctrl+Cmd+L*, choose language, then record
 
+** Retranscription
+
+Sometimes you want to re-transcribe a recording with a different transcriber, or retry a failed transcription.
+
+*** Basic Usage
+
+#+begin_src lua
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"},
+  retranscribe = {{"ctrl", "cmd"}, "r"},  -- Add this
+})
+#+end_src
+
+Press *Ctrl+Cmd+R*, pick a recent recording from the chooser, and it will be retranscribed with the current language.
+
+*** Configuration
+
+#+begin_src lua
+-- Use a specific transcriber for retranscription
+wd.retranscribeTranscriber = "whisperkit"  -- or nil to use current
+
+-- Number of recent recordings to show in chooser
+wd.retranscribeCount = 15  -- default is 10
+#+end_src
+
+*** Auto-Paste Behavior
+
+- If you stay in the same app: text auto-pastes
+- If you switch apps: text copies to clipboard only
+
+*** Use Cases
+
+- Original transcription failed or had errors
+- Want to try a more accurate transcriber (e.g., WhisperKit instead of WhisperCLI)
+- Want to re-transcribe old recordings with current language setting
+
 * Transcription Methods
 
 | Method        | What it is                       | Speed      | Privacy    | Best for                       |
@@ -542,6 +578,7 @@ wd.config = {
   -- New Architecture (v2) configuration
   wd.config.recorder = 'streaming'  -- Use StreamingRecorder with Python server
   wd.config.transcriber = 'whisperserver'  -- Use WhisperServer transcriber
+  wd.config.retranscriber = 'whisperkit'  -- I find whisperkit to be more precise 
 
   -- Configure StreamingRecorder
   wd.config.streaming = {
@@ -564,7 +601,7 @@ wd.config = {
   }
 
   wd:bindHotKeys({
-      toggle = {dmg_all_keys, "l"},
+      toggle= {dmg_all_keys, "l"},
       togglePaste = {{}, "F15"},
       nextLang = {dmg_all_keys, ";"},
       retranscribe = {dmg_all_keys, "'"},
