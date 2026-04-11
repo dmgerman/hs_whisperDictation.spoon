@@ -9,7 +9,8 @@ Speak and see your words appear as text. Works offline, supports 100+ languages,
 *This version has been completely rearchitected* for better reliability and maintainability:
 - New callback-based architecture (simpler, more testable)
 - Improved error handling and state management
-- 408+ comprehensive tests
+- 600+ comprehensive tests
+- Post-transcription filters (pipe text through shell commands)
 
 *Breaking changes from v1.x:*
 - Configuration API changed (see examples below)
@@ -25,6 +26,7 @@ If upgrading from v1.x, you'll need to update your configuration.
 2. *Speak* your text
 3. *Press the hotkey again* to stop
 4. *Get your text* - either pasted automatically or copied to clipboard
+5. Optionally, *apply a filter* (e.g., grammar fix, translation) before the text reaches clipboard
 
 That's it!
 
@@ -208,6 +210,72 @@ wd.retranscribeCount = 15  -- default is 10
 - Want to try a more accurate transcriber (e.g., WhisperKit instead of WhisperCLI)
 - Want to re-transcribe old recordings with current language setting
 
+** Post-Transcription Filters
+
+Pipe your transcription through any shell command before it goes to clipboard. Filters read from stdin and write to stdout.
+
+*** Basic Usage
+
+#+begin_src lua
+wd.whisperFilters = {
+  { name = "Fix Grammar", cmd = "grammar-fix" },
+  { name = "Translate to Spanish", cmd = "translate-es" },
+  { name = "Ask ChatGPT", cmd = "~/bin/chatgpt-answer-question.py" },
+}
+
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"},
+  selectFilter = {{"ctrl", "cmd"}, "f"},  -- Open filter picker
+})
+#+end_src
+
+Press *Ctrl+Cmd+F* to open the filter chooser. Select a filter and it stays active for all subsequent recordings until you change it. Choose "No Filter" to return to raw transcription.
+
+*** How It Works
+
+1. Record and transcribe as normal
+2. If a filter is active, the transcribed text is piped through the filter command
+3. The filtered output replaces the original text in the clipboard
+4. If the filter fails (non-zero exit, empty output, script not found), the original unfiltered text is used instead and a warning is shown
+
+*** Writing a Filter Script
+
+A filter is any command that reads stdin and writes to stdout:
+
+#+begin_src bash
+#!/bin/bash
+# ~/bin/uppercase-filter.sh
+tr '[:lower:]' '[:upper:]'
+#+end_src
+
+#+begin_src python
+#!/usr/bin/env python3
+# ~/bin/grammar-fix.py
+import sys
+text = sys.stdin.read()
+# ... process text ...
+print(corrected_text)
+#+end_src
+
+*** Configuration
+
+#+begin_src lua
+-- Define available filters
+wd.whisperFilters = {
+  { name = "Display Name", cmd = "shell-command-here" },
+}
+
+-- Filters can use full paths or commands in PATH
+-- The command runs in a login shell (/bin/zsh -l) so your PATH is available
+#+end_src
+
+*** Error Handling
+
+- *Script not found:* Original text is used, warning alert shown
+- *Non-zero exit code:* Original text is used, warning alert shown with stderr
+- *Empty output:* Original text is used
+- *Script hangs:* Original text will eventually be used (no timeout currently)
+
 * Transcription Methods
 
 | Method        | What it is                       | Speed      | Privacy    | Best for                       |
@@ -361,7 +429,7 @@ wd.tempDir = "/tmp/whisper_dict"  -- Where audio files are saved
 wd.timeoutSeconds = 1800  -- Auto-stop after 30 minutes (nil = no limit)
 
 -- UI
-wd.showRecordingIndicator = true  -- Show red dot while recording
+wd.showRecordingIndicator = true  -- Show sound wave overlay while recording
 #+end_src
 
 ** Transcriber Configuration
@@ -424,6 +492,20 @@ wd.monitorUserActivity = true  -- Enable activity monitoring
 wd.autoPasteDelay = 0.1         -- Delay before pasting (seconds)
 wd.pasteWithEmacsYank = false   -- Use Ctrl-Y for Emacs (if true)
 #+end_src
+
+** Available Hotkeys
+
+#+begin_src lua
+wd:bindHotKeys({
+  toggle       = {{"ctrl", "cmd"}, "d"},  -- Start/stop recording
+  togglePaste  = {{"ctrl", "cmd"}, "p"},  -- Start/stop with auto-paste
+  nextLang     = {{"ctrl", "cmd"}, "l"},  -- Open language chooser
+  retranscribe = {{"ctrl", "cmd"}, "r"},  -- Re-transcribe a recent recording
+  selectFilter = {{"ctrl", "cmd"}, "f"},  -- Open filter chooser
+})
+#+end_src
+
+All hotkeys are optional. Only bind the ones you need.
 
 * Troubleshooting
 
@@ -568,7 +650,6 @@ wd.config = {
 - I keep both the recorder and transcriber in memory (after first use).
 
 #+begin_src lua   :exports both
-  dmg_all_keys = {"cmd", "alt", "ctrl"}
 
   local wd = hs.loadSpoon("hs_whisperDictation")
   wd.languages = {"en", "ja", "es"}
@@ -578,7 +659,7 @@ wd.config = {
   -- New Architecture (v2) configuration
   wd.config.recorder = 'streaming'  -- Use StreamingRecorder with Python server
   wd.config.transcriber = 'whisperserver'  -- Use WhisperServer transcriber
-  wd.config.retranscriber = 'whisperkit'  -- I find whisperkit to be more precise 
+  wd.config.retranscriber = 'whisperkit'  -- I find whisperkit to be more precise
 
   -- Configure StreamingRecorder
   wd.config.streaming = {
@@ -601,11 +682,17 @@ wd.config = {
   }
 
   wd:bindHotKeys({
-      toggle= {dmg_all_keys, "l"},
+      toggle = {{"cmd", "alt", "ctrl"}, "l"},
       togglePaste = {{}, "F15"},
-      nextLang = {dmg_all_keys, ";"},
-      retranscribe = {dmg_all_keys, "'"},
+      nextLang = {{"cmd", "alt", "ctrl"}, ";"},
+      retranscribe = {{"cmd", "alt", "ctrl"}, "'"},
+      selectFilter = {{}, "F13"},
   })
+
+  -- Post-transcription filters (optional)
+  wd.whisperFilters = {
+    { name = "chatGPT answer question", cmd = os.getenv("HOME") .. "/bin/chatgpt-answer-question.py" },
+  }
 
   wd:start()
 
@@ -633,5 +720,5 @@ MIT License - See LICENSE file
 * For Developers
 
 - [[file:docs/architecture.md][Architecture Documentation]] - Current v2.0 architecture
-- [[file:docs/testing.md][Testing Guide]] - 408+ tests
+- [[file:docs/testing.md][Testing Guide]] - 600+ tests
 - [[file:recorders/streaming/whisper_stream.md][Streaming Recorder Documentation]] - Python VAD server
