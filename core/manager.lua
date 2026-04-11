@@ -57,6 +57,7 @@ function Manager.new(recorder, transcriber, config)
 
   -- Callbacks for UI integration
   self.onStateChanged = nil  -- function(newState, oldState, context)
+  self.onTextReady = nil  -- function(finalText) called with assembled text before clipboard
 
   return self
 end
@@ -361,28 +362,31 @@ function Manager:_checkIfComplete()
   end
 end
 
---- Finalize the session - assemble results and copy to clipboard
+--- Finalize the session - assemble results and deliver text
 function Manager:_finalize()
   -- Assemble results
   local finalText = self:_assembleResults()
 
-  -- Copy to clipboard
-  if hs and hs.pasteboard then
-    hs.pasteboard.setContents(finalText)
-    Notifier.show("transcription", "info", "Transcription complete! Copied to clipboard.")
-  else
-    -- Fallback for testing
-    Notifier.show("transcription", "info", "Transcription complete: " .. finalText)
+  -- Deliver text via callback (supports async filtering) then transition to IDLE.
+  -- IDLE transition must happen AFTER the callback completes, because
+  -- onStateChanged triggers auto-paste which needs the clipboard set first.
+  local function transitionToIdle()
+    if self.state == Manager.STATES.TRANSCRIBING or self.state == Manager.STATES.ERROR then
+      self:transitionTo(Manager.STATES.IDLE, "finalize")
+    end
   end
 
-  -- Transition back to IDLE (only if in valid state)
-  -- RECORDING -> IDLE is invalid (stopRecording will handle transition to TRANSCRIBING)
-  -- TRANSCRIBING -> IDLE is valid
-  -- ERROR -> IDLE is valid
-  if self.state == Manager.STATES.TRANSCRIBING or self.state == Manager.STATES.ERROR then
-    self:transitionTo(Manager.STATES.IDLE, "finalize")
+  if self.onTextReady then
+    self.onTextReady(finalText, transitionToIdle)
+  else
+    if hs and hs.pasteboard then
+      hs.pasteboard.setContents(finalText)
+      Notifier.show("transcription", "info", "Transcription complete! Copied to clipboard.")
+    else
+      Notifier.show("transcription", "info", "Transcription complete: " .. finalText)
+    end
+    transitionToIdle()
   end
-  -- If still in RECORDING state, don't transition - stopRecording() will handle it
 end
 
 --- Assemble results from all chunks

@@ -149,11 +149,17 @@ obj.pasteWithEmacsYank = false
 obj.retranscribeTranscriber = nil  -- Transcriber to use for retranscription (nil = use current)
 obj.retranscribeCount = 10  -- Number of recent recordings to show in chooser
 
+-- Post-transcription filters (stdin→stdout shell commands)
+-- Example: { { name = "Fix Grammar", cmd = "grammar-fix" }, { name = "Uppercase", cmd = "tr '[:lower:]' '[:upper:]'" } }
+obj.whisperFilters = {}
+obj.activeFilter = nil  -- index into whisperFilters, nil = no filter
+
 -- Default hotkeys
 obj.defaultHotkeys = {
   toggle = {{"ctrl", "cmd"}, "d"},
   nextLang = {{"ctrl", "cmd"}, "l"},
   -- retranscribe = {{"ctrl", "cmd"}, "r"},  -- Uncomment to enable retranscription hotkey
+  -- selectFilter = {{"ctrl", "cmd"}, "f"},  -- Uncomment to enable filter picker hotkey
 }
 
 -- ============================================================================
@@ -482,6 +488,82 @@ local function smartPaste()
 end
 
 -- ============================================================================
+-- === Filter Support ===
+-- ============================================================================
+
+--- Apply the active filter to text via async shell command.
+--- If no filter is active, calls callback immediately with unmodified text.
+--- @param text string The text to filter
+--- @param callback function Called with filtered text: callback(filteredText)
+local function applyFilter(text, callback)
+  if not obj.activeFilter or #obj.whisperFilters == 0 then
+    callback(text)
+    return
+  end
+
+  local filter = obj.whisperFilters[obj.activeFilter]
+  if not filter or not filter.cmd then
+    callback(text)
+    return
+  end
+
+  obj.logger:info("Applying filter: " .. filter.name)
+
+  local task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+    if exitCode == 0 and stdOut and #stdOut > 0 then
+      -- Trim trailing newline added by most commands
+      local filtered = stdOut:gsub("\n$", "")
+      obj.logger:info("Filter applied successfully")
+      callback(filtered)
+    else
+      local msg = "Filter '" .. filter.name .. "' failed (exit " .. exitCode .. "): " .. tostring(stdErr)
+      obj.logger:warn(msg .. " — using unfiltered text")
+      hs.alert.show("⚠️ " .. msg .. "\nUsing unfiltered text", 5)
+      callback(text)
+    end
+  end, {"-l", "-c", filter.cmd})
+
+  if not task then
+    obj.logger:warn("Failed to create filter task — using unfiltered text")
+    callback(text)
+    return
+  end
+
+  task:setInput(text)
+  task:start()
+end
+
+--- Show chooser to select a transcription filter.
+local function showFilterChooser()
+  local choices = {
+    {
+      text = "No Filter",
+      subText = (obj.activeFilter == nil) and "✓ Active" or "",
+      filterIndex = nil,
+    },
+  }
+
+  for i, filter in ipairs(obj.whisperFilters) do
+    table.insert(choices, {
+      text = filter.name,
+      subText = (obj.activeFilter == i) and "✓ Active" or filter.cmd,
+      filterIndex = i,
+    })
+  end
+
+  local chooser = hs.chooser.new(function(choice)
+    if choice then
+      obj.activeFilter = choice.filterIndex
+      local name = choice.filterIndex and obj.whisperFilters[choice.filterIndex].name or "None"
+      obj.logger:info("Filter set to: " .. name, true)
+    end
+  end)
+
+  chooser:choices(choices)
+  chooser:show()
+end
+
+-- ============================================================================
 -- === Retranscription Helpers ===
 -- ============================================================================
 
@@ -523,34 +605,38 @@ local function handleRetranscriptionResult(success, textOrError, callback)
 
   -- Success!
   if callback then
-    -- User provided callback - call it with result
-    callback(textOrError)
+    -- User provided callback - apply filter then call it
+    applyFilter(textOrError, function(filtered)
+      callback(filtered)
+    end)
   else
-    -- No callback - handle via clipboard/paste
-    -- Copy to clipboard first
-    hs.pasteboard.setContents(textOrError)
+    -- No callback - apply filter then handle via clipboard/paste
+    applyFilter(textOrError, function(filtered)
+      hs.pasteboard.setContents(filtered)
 
-    -- Check if should auto-paste
-    local shouldAutoPaste = false
-    if obj.retranscribeStartingApp then
-      local focusedWindow = hs.window.focusedWindow()
-      local currentApp = focusedWindow and focusedWindow:application()
+      -- Check if should auto-paste
+      local shouldAutoPaste = false
+      if obj.retranscribeStartingApp then
+        local focusedWindow = hs.window.focusedWindow()
+        local currentApp = focusedWindow and focusedWindow:application()
 
-      if currentApp and currentApp:bundleID() == obj.retranscribeStartingApp:bundleID() then
-        shouldAutoPaste = true
+        if currentApp and currentApp:bundleID() == obj.retranscribeStartingApp:bundleID() then
+          shouldAutoPaste = true
+        end
       end
-    end
 
-    if shouldAutoPaste then
-      -- Auto-paste
-      hs.timer.doAfter(obj.autoPasteDelay, function()
-        smartPaste()
-        Notifier.show("transcription", "info", "Retranscription pasted")
-      end)
-    else
-      -- Just clipboard
-      Notifier.show("transcription", "info", "Retranscription copied to clipboard")
-    end
+      if shouldAutoPaste then
+        hs.timer.doAfter(obj.autoPasteDelay, function()
+          smartPaste()
+          Notifier.show("transcription", "info", "Retranscription pasted")
+        end)
+      else
+        Notifier.show("transcription", "info", "Retranscription copied to clipboard")
+      end
+
+      obj.retranscribeStartingApp = nil
+    end)
+    return
   end
 
   -- Reset state
@@ -1027,6 +1113,16 @@ function obj:start()
     tempDir = obj.tempDir,
   })
 
+  -- Set up text ready callback (supports async filtering)
+  obj.manager.onTextReady = function(finalText, transitionToIdle)
+    applyFilter(finalText, function(filtered)
+      hs.pasteboard.setContents(filtered)
+      local Notifier = dofile(spoonPath .. "lib/notifier.lua")
+      Notifier.show("transcription", "info", "Transcription complete! Copied to clipboard.")
+      transitionToIdle()
+    end)
+  end
+
   -- Set up state change callback for UI updates
   obj.manager.onStateChanged = function(newState, oldState, context)
     if newState == "TRANSCRIBING" then
@@ -1160,6 +1256,9 @@ function obj:bindHotKeys(mapping)
     elseif name == "retranscribe" then
       obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Retranscribe recent recording [Audio]", function() obj:transcribeLatestAgain() end)
       obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
+    elseif name == "selectFilter" then
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select transcription filter [Audio]", showFilterChooser)
+      obj.logger:debug("Bound hotkey: selectFilter to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self

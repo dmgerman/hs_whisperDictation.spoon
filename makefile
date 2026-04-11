@@ -5,7 +5,7 @@
 # Default target: run all busted unit tests (quiet mode - only show errors)
 test:
 	@echo "Running Lua tests..."
-	@busted 2>&1 | grep -E "^not ok" || (busted --output=TAP 2>&1 | tail -1 && echo "✓ All 368 Lua tests passed")
+	@busted --output=TAP || exit 1
 	@echo ""
 	@echo "Running Python tests..."
 	@pytest tests/python -q || exit 1

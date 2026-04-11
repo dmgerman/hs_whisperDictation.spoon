@@ -63,6 +63,7 @@ MockHS.pasteboard = {
 --- hs.task - Process execution
 MockHS.task = {
   _creationCallback = nil,  -- For testing task creation with specific arguments
+  _nextOutput = nil,  -- {exitCode, stdout, stderr} for next task's callback
 
   new = function(launchPath, callbackFn, args)
     local task = {
@@ -72,7 +73,11 @@ MockHS.task = {
       _pid = #state.tasks + 1,
       _running = false,
       _streamingCallback = nil,
+      _input = nil,
     }
+    -- Capture configured output at creation time
+    local output = MockHS.task._nextOutput
+    MockHS.task._nextOutput = nil
 
     function task:start()
       self._running = true
@@ -82,7 +87,11 @@ MockHS.task = {
         -- Call callback in next tick
         MockHS.timer.doAfter(0.001, function()
           if self._running then
-            self._callback(0, "", "")  -- exitCode, stdout, stderr
+            if output then
+              self._callback(output[1], output[2], output[3])
+            else
+              self._callback(0, "", "")  -- exitCode, stdout, stderr
+            end
           end
         end)
       end
@@ -107,6 +116,11 @@ MockHS.task = {
 
     function task:setStreamingCallback(fn)
       self._streamingCallback = fn
+      return self
+    end
+
+    function task:setInput(text)
+      self._input = text
       return self
     end
 
@@ -137,6 +151,14 @@ MockHS.task = {
 
   _clearExitCallback = function()
     MockHS.task._exitCallback = nil
+  end,
+
+  --- Set output for the next task created
+  --- @param exitCode number Exit code
+  --- @param stdout string Standard output
+  --- @param stderr string Standard error
+  _setNextOutput = function(exitCode, stdout, stderr)
+    MockHS.task._nextOutput = {exitCode, stdout, stderr}
   end,
 }
 
