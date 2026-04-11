@@ -291,23 +291,34 @@ local function showRecordingIndicator()
   local focusedWindow = hs.window.focusedWindow()
   local screen = focusedWindow and focusedWindow:screen() or hs.screen.mainScreen()
   local frame = screen:frame()
-  local centerX = frame.x + frame.w / 2
-  local centerY = frame.y + frame.h / 2
-  local radius = frame.h / 20
 
-  obj.recordingIndicator = hs.drawing.circle(
-    hs.geometry.rect(centerX - radius, centerY - radius, radius * 2, radius * 2)
-  )
+  local img = hs.image.imageFromPath(spoonPath .. "assets/sound_wave.png")
+  if not img then return end
 
-  local style = obj.recordingIndicatorStyle
-  obj.recordingIndicator:setFillColor(style.fillColor)
-  obj.recordingIndicator:setStrokeColor(style.strokeColor)
-  obj.recordingIndicator:setStrokeWidth(style.strokeWidth)
-  obj.recordingIndicator:show()
+  local imgSize = img:size()
+  local scale = (frame.h / 5) / imgSize.h
+  local canvasW = imgSize.w * scale
+  local canvasH = imgSize.h * scale
+  local canvasX = frame.x + (frame.w - canvasW) / 2
+  local canvasY = frame.y + (frame.h - canvasH) / 2
+
+  local canvas = hs.canvas.new({x = canvasX, y = canvasY, w = canvasW, h = canvasH})
+  canvas:appendElements({
+    type = "image",
+    image = img,
+    frame = {x = 0, y = 0, w = canvasW, h = canvasH},
+    imageScaling = "scaleToFit",
+  })
+
+  canvas:level(hs.canvas.windowLevels.overlay)
+  canvas:show()
+
+  obj.recordingIndicator = canvas
 end
 
 local function hideRecordingIndicator()
   if obj.recordingIndicator then
+    obj.recordingIndicator:hide()
     obj.recordingIndicator:delete()
     obj.recordingIndicator = nil
   end
