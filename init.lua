@@ -491,46 +491,17 @@ end
 -- === Filter Support ===
 -- ============================================================================
 
+local Filter = dofile(spoonPath .. "lib/filter.lua")
+
 --- Apply the active filter to text via async shell command.
 --- If no filter is active, calls callback immediately with unmodified text.
 --- @param text string The text to filter
 --- @param callback function Called with filtered text: callback(filteredText)
 local function applyFilter(text, callback)
-  if not obj.activeFilter or #obj.whisperFilters == 0 then
-    callback(text)
-    return
-  end
-
-  local filter = obj.whisperFilters[obj.activeFilter]
-  if not filter or not filter.cmd then
-    callback(text)
-    return
-  end
-
-  obj.logger:info("Applying filter: " .. filter.name)
-
-  local task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
-    if exitCode == 0 and stdOut and #stdOut > 0 then
-      -- Trim trailing newline added by most commands
-      local filtered = stdOut:gsub("\n$", "")
-      obj.logger:info("Filter applied successfully")
-      callback(filtered)
-    else
-      local msg = "Filter '" .. filter.name .. "' failed (exit " .. exitCode .. "): " .. tostring(stdErr)
-      obj.logger:warn(msg .. " — using unfiltered text")
-      hs.alert.show("⚠️ " .. msg .. "\nUsing unfiltered text", 5)
-      callback(text)
-    end
-  end, {"-l", "-c", filter.cmd})
-
-  if not task then
-    obj.logger:warn("Failed to create filter task — using unfiltered text")
-    callback(text)
-    return
-  end
-
-  task:setInput(text)
-  task:start()
+  Filter.apply(text, {
+    activeFilter = obj.activeFilter,
+    whisperFilters = obj.whisperFilters,
+  }, obj.logger, callback)
 end
 
 --- Show chooser to select a transcription filter.

@@ -223,12 +223,10 @@ function Manager:stopRecording()
   -- Show feedback
   Notifier.show("recording", "info", "Recording stopped, transcribing...")
 
-  -- DO NOT call _checkIfComplete() here!
-  -- Chunks haven't been emitted yet by recorder (both SoxRecorder and StreamingRecorder
-  -- emit chunks AFTER stopRecording() returns, via async callbacks).
-  -- Completion will be triggered by:
-  -- 1. _onRecordingComplete() callback (when recorder finishes stop)
-  -- 2. _onTranscriptionSuccess/Error() (when transcriptions complete)
+  -- Check if already complete (recorder's onComplete may have fired
+  -- synchronously during stopRecording, but was deferred until now
+  -- because we weren't in TRANSCRIBING state yet)
+  self:_checkIfComplete()
 
   return true, nil
 end
@@ -352,9 +350,16 @@ end
 --- Check if recording and all transcriptions are complete
 function Manager:_checkIfComplete()
   Notifier.show("transcription", "debug", string.format(
-    "Completion check: recordingComplete=%s, pending=%d",
-    tostring(self.recordingComplete), self.pendingTranscriptions
+    "Completion check: recordingComplete=%s, pending=%d, state=%s",
+    tostring(self.recordingComplete), self.pendingTranscriptions, self.state
   ))
+
+  -- Only finalize from TRANSCRIBING or ERROR state.
+  -- If still in RECORDING, stopRecording() hasn't transitioned yet —
+  -- it will call _checkIfComplete again after transitioning.
+  if self.state ~= Manager.STATES.TRANSCRIBING and self.state ~= Manager.STATES.ERROR then
+    return
+  end
 
   if self.recordingComplete and self.pendingTranscriptions == 0 then
     -- All done - assemble and finalize

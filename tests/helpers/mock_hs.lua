@@ -64,8 +64,14 @@ MockHS.pasteboard = {
 MockHS.task = {
   _creationCallback = nil,  -- For testing task creation with specific arguments
   _nextOutput = nil,  -- {exitCode, stdout, stderr} for next task's callback
+  _failNextCreation = false,  -- If true, next task.new returns nil
 
   new = function(launchPath, callbackFn, args)
+    if MockHS.task._failNextCreation then
+      MockHS.task._failNextCreation = false
+      return nil
+    end
+
     local task = {
       _launchPath = launchPath,
       _callback = callbackFn,
@@ -268,8 +274,9 @@ MockHS.fs = {
     -- Check if file actually exists (for real file testing)
     local f = io.open(filepath, "r")
     if f then
+      local size = f:seek("end") or 0
       f:close()
-      return { mode = "file", size = 0 }
+      return { mode = "file", size = size }
     end
     return nil
   end,
@@ -616,6 +623,29 @@ MockHS.drawing = {
       delete = function() end,
     }
   end,
+}
+
+--- hs.image - Image loading
+MockHS.image = {
+  imageFromPath = function(path)
+    return {
+      size = function() return {w = 100, h = 100} end,
+    }
+  end,
+}
+
+--- hs.canvas - Canvas drawing
+MockHS.canvas = {
+  new = function(frame)
+    return {
+      appendElements = function() end,
+      show = function() end,
+      hide = function() end,
+      delete = function() end,
+      level = function() end,
+    }
+  end,
+  windowLevels = { overlay = 25 },
 }
 
 --- hs.menubar - Menubar items

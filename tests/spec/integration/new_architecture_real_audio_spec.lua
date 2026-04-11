@@ -193,14 +193,14 @@ describe("New Architecture - Real Audio Tests", function()
 
     it("should fail validation if model path is wrong", function()
       transcriber = WhisperCLITranscriber.new({
-        executable = "/opt/homebrew/bin/whisper-cpp",
+        executable = "/opt/homebrew/bin/whisper-cli",
         modelPath = "/nonexistent/model.bin"
       })
 
       local ok, err = transcriber:validate()
       assert.is_false(ok, "Should fail validation")
       assert.is_not_nil(err)
-      assert.is_true(err:match("Model file not found") ~= nil or err:match("not configured") ~= nil)
+      assert.is_true(err:match("Model file not found") ~= nil)
     end)
 
     it("should return error for non-existent audio file", function()
