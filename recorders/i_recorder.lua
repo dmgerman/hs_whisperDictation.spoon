@@ -64,4 +64,14 @@ function IRecorder:getName()
   error("IRecorder:getName() must be implemented by subclass")
 end
 
+--- Warm up the recorder (optional)
+--- Called at spoon initialization to pre-start any background processes.
+--- Default is a no-op. Override for recorders with startup latency.
+---
+--- @return boolean success True if warmup succeeded
+--- @return string|nil error Error message if failed
+function IRecorder:warmup()
+  return true, nil
+end
+
 return IRecorder

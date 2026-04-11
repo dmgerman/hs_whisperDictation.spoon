@@ -868,8 +868,14 @@ function obj:start()
     if ok then
       obj.logger:info("✓ Recorder: " .. obj.recorder:getName())
       recorderCreated = true
+      -- Pre-start server so first recording isn't delayed
+      if obj.recorder.warmup then
+        local wOk, wErr = obj.recorder:warmup()
+        if not wOk then
+          obj.logger:warn("Recorder warmup failed: " .. tostring(wErr) .. " (will retry on first recording)")
+        end
+      end
     else
-      -- Streaming failed, try sox fallback
       Notifier.show("init", "warning", "StreamingRecorder unavailable: " .. tostring(err) .. ", using SoxRecorder as fallback")
       obj.logger:warn("StreamingRecorder validation failed: " .. tostring(err) .. ", falling back to Sox")
 

@@ -443,6 +443,17 @@ function StreamingRecorder:_ensureServerRunning(outputDir, filenamePrefix)
   return true, nil
 end
 
+--- Pre-start the Python server so first recording starts instantly.
+--- Called at spoon initialization. If it fails, startRecording will
+--- retry via _ensureServerRunning as before.
+---
+--- @return boolean success True if server started
+--- @return string|nil error Error message if failed
+function StreamingRecorder:warmup()
+  print("[StreamingRecorder] Warming up server...")
+  return self:_ensureServerRunning(self.tempDir, "warmup")
+end
+
 --- Start recording audio
 ---
 --- @param config table Configuration {outputDir, lang}
