@@ -83,6 +83,9 @@ describe("New Architecture - StreamingRecorder Integration", function()
       ok, err = manager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed: " .. tostring(err))
 
+      -- Simulate recorder confirming it's done (server events arrived)
+      recorder:_triggerCompletion()
+
       -- Manager should transition to IDLE after transcription completes
       assert.equals(Manager.STATES.IDLE, manager.state)
       assert.equals(0, manager.pendingTranscriptions)
@@ -109,6 +112,9 @@ describe("New Architecture - StreamingRecorder Integration", function()
       -- Stop recording
       ok, err = manager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed")
+
+      -- Simulate recorder confirming it's done
+      recorder:_triggerCompletion()
 
       -- Should transition to IDLE after all transcriptions complete
       assert.equals(Manager.STATES.IDLE, manager.state)
@@ -197,6 +203,9 @@ describe("New Architecture - StreamingRecorder Integration", function()
       ok, err = customManager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed")
 
+      -- Simulate recorder confirming it's done
+      recorder:_triggerCompletion()
+
       -- Should have 3 pending jobs (transcriber holds them)
       assert.equals(3, #customTranscriber._pendingJobs)
 
@@ -236,6 +245,9 @@ describe("New Architecture - StreamingRecorder Integration", function()
       -- Stop recording to complete the cycle
       ok, err = manager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed")
+
+      -- Simulate recorder confirming it's done
+      recorder:_triggerCompletion()
 
       -- Now should complete
       assert.equals(Manager.STATES.IDLE, manager.state)
@@ -283,8 +295,8 @@ describe("New Architecture - StreamingRecorder Integration", function()
         )
       end
 
-      -- Mark recording complete
-      customManager.recordingComplete = true
+      -- Mark recording complete via recorder done signal
+      customManager._recorderDone = true
       customManager:_checkIfComplete()
 
       -- Should complete with partial results
@@ -345,6 +357,7 @@ describe("New Architecture - StreamingRecorder Integration", function()
 
       ok, err = manager:stopRecording()
       assert.is_true(ok, "First stopRecording should succeed")
+      recorder:_triggerCompletion()
       assert.equals(Manager.STATES.IDLE, manager.state)
 
       -- Server should still exist
@@ -361,6 +374,7 @@ describe("New Architecture - StreamingRecorder Integration", function()
 
       ok, err = manager:stopRecording()
       assert.is_true(ok, "Second stopRecording should succeed")
+      recorder:_triggerCompletion()
       assert.equals(Manager.STATES.IDLE, manager.state)
     end)
 
@@ -414,6 +428,7 @@ describe("New Architecture - StreamingRecorder Integration", function()
 
       ok, err = manager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed")
+      recorder:_triggerCompletion()
       assert.equals(Manager.STATES.IDLE, manager.state)
     end)
 
@@ -435,6 +450,7 @@ describe("New Architecture - StreamingRecorder Integration", function()
 
       ok, err = manager:stopRecording()
       assert.is_true(ok, "stopRecording should succeed")
+      recorder:_triggerCompletion()
       assert.equals(Manager.STATES.IDLE, manager.state)
     end)
 

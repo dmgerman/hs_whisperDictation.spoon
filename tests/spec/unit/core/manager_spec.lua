@@ -498,6 +498,7 @@ describe("Manager", function()
       -- Manually orchestrate out-of-order completion
       manager.state = Manager.STATES.TRANSCRIBING
       manager.recordingComplete = true
+      manager._recorderDone = true
       manager.currentLanguage = "en"
 
       -- Receive both chunks
@@ -585,6 +586,7 @@ describe("Manager", function()
       -- Manually fail chunk 2
       manager.state = Manager.STATES.TRANSCRIBING
       manager.recordingComplete = true
+      manager._recorderDone = true
       manager.pendingTranscriptions = 3
 
       manager:_onTranscriptionSuccess(1, "chunk one")

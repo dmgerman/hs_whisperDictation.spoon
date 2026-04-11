@@ -50,6 +50,7 @@ function Manager.new(recorder, transcriber, config)
   self.pendingTranscriptions = 0
   self.results = {}  -- Array indexed by chunkNum
   self.recordingComplete = false
+  self._recorderDone = false  -- Set by _onRecordingComplete callback
   self.currentLanguage = nil
 
   -- Track chunk errors for timeout/missing chunks
@@ -111,6 +112,7 @@ function Manager:_onStateEntered(state, context)
     self.pendingTranscriptions = 0
     self.results = {}
     self.recordingComplete = false
+    self._recorderDone = false
     self.currentLanguage = nil
     self._chunkErrors = {}
   end
@@ -223,9 +225,9 @@ function Manager:stopRecording()
   -- Show feedback
   Notifier.show("recording", "info", "Recording stopped, transcribing...")
 
-  -- Check if already complete (recorder's onComplete may have fired
-  -- synchronously during stopRecording, but was deferred until now
-  -- because we weren't in TRANSCRIBING state yet)
+  -- Check completion now that we're in TRANSCRIBING state.
+  -- The recorder's onComplete callback may have already fired (setting
+  -- _recorderDone=true) and been deferred because we were in RECORDING.
   self:_checkIfComplete()
 
   return true, nil
@@ -254,6 +256,7 @@ end
 --- Callback invoked when recording completes
 function Manager:_onRecordingComplete()
   Notifier.show("recording", "debug", "Recording complete callback received")
+  self._recorderDone = true
   -- Check if all transcriptions are done
   self:_checkIfComplete()
 end
@@ -350,18 +353,17 @@ end
 --- Check if recording and all transcriptions are complete
 function Manager:_checkIfComplete()
   Notifier.show("transcription", "debug", string.format(
-    "Completion check: recordingComplete=%s, pending=%d, state=%s",
-    tostring(self.recordingComplete), self.pendingTranscriptions, self.state
+    "Completion check: recorderDone=%s, pending=%d, state=%s",
+    tostring(self._recorderDone), self.pendingTranscriptions, self.state
   ))
 
-  -- Only finalize from TRANSCRIBING or ERROR state.
-  -- If still in RECORDING, stopRecording() hasn't transitioned yet —
-  -- it will call _checkIfComplete again after transitioning.
-  if self.state ~= Manager.STATES.TRANSCRIBING and self.state ~= Manager.STATES.ERROR then
+  -- Don't finalize from RECORDING — stopRecording() will transition
+  -- to TRANSCRIBING first, then _checkIfComplete runs again from there
+  if self.state == Manager.STATES.RECORDING then
     return
   end
 
-  if self.recordingComplete and self.pendingTranscriptions == 0 then
+  if self._recorderDone and self.pendingTranscriptions == 0 then
     -- All done - assemble and finalize
     self:_finalize()
   end
