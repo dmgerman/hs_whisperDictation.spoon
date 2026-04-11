@@ -1212,24 +1212,27 @@ end
 
 function obj:bindHotKeys(mapping)
   obj.logger:debug("Binding hotkeys")
+  local def = {
+    toggle       = function() obj:toggleTranscribe() end,
+    togglePaste  = function() obj:toggleTranscribe(true) end,
+    nextLang     = showLanguageChooser,
+    retranscribe = function() obj:transcribeLatestAgain() end,
+    selectFilter = showFilterChooser,
+  }
+  local descriptions = {
+    toggle       = "Toggle whisper transcription [Audio]",
+    togglePaste  = "Toggle whisper transcription with auto-paste [Audio]",
+    nextLang     = "Select whisper language for transcription [Audio]",
+    retranscribe = "Retranscribe recent recording [Audio]",
+    selectFilter = "Select transcription filter [Audio]",
+  }
+
   local map = hs.fnutils.copy(mapping or obj.defaultHotkeys)
   for name, spec in pairs(map) do
     if obj.hotkeys[name] then obj.hotkeys[name]:delete() end
-    if name == "toggle" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Toggle whisper transcription [Audio]", function() obj:toggleTranscribe() end)
-      obj.logger:debug("Bound hotkey: toggle to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
-    elseif name == "togglePaste" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Toggle whisper transcription with auto-paste [Audio]", function() obj:toggleTranscribe(true) end)
-      obj.logger:debug("Bound hotkey: togglePaste to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
-    elseif name == "nextLang" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select whisper language for transcription [Audio]", showLanguageChooser)
-      obj.logger:debug("Bound hotkey: nextLang to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
-    elseif name == "retranscribe" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Retranscribe recent recording [Audio]", function() obj:transcribeLatestAgain() end)
-      obj.logger:debug("Bound hotkey: retranscribe to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
-    elseif name == "selectFilter" then
-      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], "Select transcription filter [Audio]", showFilterChooser)
-      obj.logger:debug("Bound hotkey: selectFilter to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
+    if def[name] then
+      obj.hotkeys[name] = hs.hotkey.bind(spec[1], spec[2], descriptions[name], def[name])
+      obj.logger:debug("Bound hotkey: " .. name .. " to " .. table.concat(spec[1], "+") .. "+" .. spec[2])
     end
   end
   return self
