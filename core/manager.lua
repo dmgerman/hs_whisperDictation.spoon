@@ -23,7 +23,7 @@ Manager.STATES = {
 -- Valid state transitions
 local VALID_TRANSITIONS = {
   IDLE = { RECORDING = true, ERROR = true },
-  RECORDING = { TRANSCRIBING = true, ERROR = true },
+  RECORDING = { TRANSCRIBING = true, IDLE = true, ERROR = true },
   TRANSCRIBING = { IDLE = true, ERROR = true },
   ERROR = { IDLE = true },
 }
@@ -246,6 +246,31 @@ function Manager:reset()
   return self:transitionTo(Manager.STATES.IDLE, "manual-reset")
 end
 
+--- Abort current recording or transcription and return to IDLE.
+--- Can be called from any non-IDLE state.
+---
+--- @return boolean success True if aborted
+--- @return string|nil error Error message if nothing to abort
+function Manager:abort()
+  if self.state == Manager.STATES.IDLE then
+    return false, "Nothing to abort"
+  end
+
+  local fromState = self.state
+  Notifier.show("recording", "info", "Aborted (" .. fromState .. ")")
+
+  -- Stop recorder if still recording
+  if self.state == Manager.STATES.RECORDING and self.recorder then
+    pcall(function()
+      self.recorder:stopRecording(function() end, function() end)
+    end)
+  end
+
+  -- Transition to IDLE (clears all tracking state via _onStateEntered)
+  self:transitionTo(Manager.STATES.IDLE, "abort")
+  return true, nil
+end
+
 --- Get current state
 ---
 --- @return string state Current state
@@ -255,9 +280,11 @@ end
 
 --- Callback invoked when recording completes
 function Manager:_onRecordingComplete()
+  -- Ignore if aborted (state reset to IDLE)
+  if self.state == Manager.STATES.IDLE then return end
+
   Notifier.show("recording", "debug", "Recording complete callback received")
   self._recorderDone = true
-  -- Check if all transcriptions are done
   self:_checkIfComplete()
 end
 
@@ -267,6 +294,9 @@ end
 --- @param chunkNum number Chunk number (1-indexed)
 --- @param isFinal boolean True if this is the last chunk
 function Manager:_onChunkReceived(audioFile, chunkNum, isFinal)
+  -- Ignore chunks after abort (state reset to IDLE)
+  if self.state == Manager.STATES.IDLE then return end
+
   Notifier.show("transcription", "debug", string.format(
     "Chunk received: #%d (final: %s, file: %s)",
     chunkNum, tostring(isFinal), audioFile

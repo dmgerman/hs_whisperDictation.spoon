@@ -134,12 +134,11 @@ describe("Manager", function()
         assert.equals(Manager.STATES.IDLE, manager.state)
       end)
 
-      it("should reject RECORDING -> IDLE", function()
+      it("should allow RECORDING -> IDLE (abort)", function()
         manager.state = Manager.STATES.RECORDING
-        local ok, err = manager:transitionTo(Manager.STATES.IDLE, "test")
-        assert.is_false(ok)
-        assert.is_string(err)
-        assert.equals(Manager.STATES.RECORDING, manager.state)
+        local ok, err = manager:transitionTo(Manager.STATES.IDLE, "abort")
+        assert.is_true(ok)
+        assert.equals(Manager.STATES.IDLE, manager.state)
       end)
 
       it("should reject RECORDING -> RECORDING", function()

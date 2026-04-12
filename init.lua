@@ -886,6 +886,23 @@ function obj:toggle(callbackOrPaste)
   return self:toggleTranscribe(callbackOrPaste)
 end
 
+function obj:abort()
+  if not self.manager then
+    self.logger:error("Manager not initialized", true)
+    return self
+  end
+
+  local ok, err = self.manager:abort()
+  if ok then
+    stopRecordingSession()
+    resetMenuToIdle()
+  else
+    self.logger:info(err)
+  end
+
+  return self
+end
+
 --- Re-transcribe a recent recording
 --- Shows a chooser with recent recordings from tempDir
 --- @param callback function|nil Optional callback to receive transcription result
@@ -1218,6 +1235,7 @@ function obj:bindHotKeys(mapping)
     nextLang     = showLanguageChooser,
     retranscribe = function() obj:transcribeLatestAgain() end,
     selectFilter = showFilterChooser,
+    abort        = function() obj:abort() end,
   }
   local descriptions = {
     toggle       = "Toggle whisper transcription [Audio]",
@@ -1225,6 +1243,7 @@ function obj:bindHotKeys(mapping)
     nextLang     = "Select whisper language for transcription [Audio]",
     retranscribe = "Retranscribe recent recording [Audio]",
     selectFilter = "Select transcription filter [Audio]",
+    abort        = "Abort current recording/transcription [Audio]",
   }
 
   local map = hs.fnutils.copy(mapping or obj.defaultHotkeys)

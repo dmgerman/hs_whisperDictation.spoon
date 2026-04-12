@@ -502,10 +502,18 @@ wd:bindHotKeys({
   nextLang     = {{"ctrl", "cmd"}, "l"},  -- Open language chooser
   retranscribe = {{"ctrl", "cmd"}, "r"},  -- Re-transcribe a recent recording
   selectFilter = {{"ctrl", "cmd"}, "f"},  -- Open filter chooser
+  abort        = {{"ctrl", "cmd"}, "a"},  -- Abort recording/transcription
 })
 #+end_src
 
 All hotkeys are optional. Only bind the ones you need.
+
+** Aborting a Recording or Transcription
+
+Press the =abort= hotkey to cancel the current operation and return to idle. Works from any state:
+- *While recording:* stops the recorder and discards the audio
+- *While transcribing:* cancels pending transcriptions
+- *While idle:* does nothing (no error)
 
 * Troubleshooting
 
