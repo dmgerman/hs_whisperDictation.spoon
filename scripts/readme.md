@@ -40,7 +40,7 @@ REMOTE_LLM_HOST = "iridium.dmg"
 LOCAL_LLM_PORT = 1234
 ```
 
-Set `REMOTE_LLM_HOST = ""` to only check localhost.
+Set `REMOTE_LLM_HOST = None` to only check localhost.
 
 ## Requirements
 
