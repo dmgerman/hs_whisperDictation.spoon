@@ -276,14 +276,42 @@ local function updateMenu(title, tip)
   end
 end
 
+--- Get the active filter abbreviation, name, or nil
+local function activeFilterAbbrev()
+  if obj.activeFilter and obj.whisperFilters[obj.activeFilter] then
+    local filter = obj.whisperFilters[obj.activeFilter]
+    return filter.abbrev or nil
+  end
+  return nil
+end
+
+local function activeFilterName()
+  if obj.activeFilter and obj.whisperFilters[obj.activeFilter] then
+    return obj.whisperFilters[obj.activeFilter].name
+  end
+  return nil
+end
+
 local function resetMenuToIdle()
-  updateMenu(obj.icons.idle .. " (" .. currentLang() .. ")", "Idle")
+  local abbrev = activeFilterAbbrev()
+  local title = obj.icons.idle .. " (" .. currentLang() .. ")"
+  local tip = "Idle"
+  if abbrev then
+    title = title .. " [" .. abbrev .. "]"
+    tip = "Filter: " .. activeFilterName()
+  end
+  updateMenu(title, tip)
 end
 
 local function updateElapsed()
   if obj.manager and obj.manager.state == "RECORDING" then
     local elapsed = obj.startTime and (os.time() - obj.startTime) or 0
-    updateMenu(string.format("%s %ds (%s)", obj.icons.recording, elapsed, currentLang()), "Recording...")
+    local abbrev = activeFilterAbbrev()
+    local title = string.format("%s %ds (%s)", obj.icons.recording, elapsed, currentLang())
+    if abbrev then
+      title = title .. " [" .. abbrev .. "]"
+    end
+    updateMenu(title, "Recording...")
   end
 end
 
@@ -508,16 +536,17 @@ end
 local function showFilterChooser()
   local choices = {
     {
-      text = "No Filter",
-      subText = (obj.activeFilter == nil) and "✓ Active" or "",
+      text = (obj.activeFilter == nil) and "● No Filter" or "No Filter",
+      subText = "Pass transcription through unchanged",
       filterIndex = nil,
     },
   }
 
   for i, filter in ipairs(obj.whisperFilters) do
+    local isActive = (obj.activeFilter == i)
     table.insert(choices, {
-      text = filter.name,
-      subText = (obj.activeFilter == i) and "✓ Active" or filter.cmd,
+      text = (isActive and "● " or "") .. filter.name,
+      subText = filter.cmd,
       filterIndex = i,
     })
   end
@@ -525,8 +554,9 @@ local function showFilterChooser()
   local chooser = hs.chooser.new(function(choice)
     if choice then
       obj.activeFilter = choice.filterIndex
-      local name = choice.filterIndex and obj.whisperFilters[choice.filterIndex].name or "None"
+      local name = activeFilterName() or "None"
       obj.logger:info("Filter set to: " .. name, true)
+      resetMenuToIdle()
     end
   end)
 
@@ -828,7 +858,12 @@ function obj:beginTranscribe(callbackOrPaste)
   local ok, err = self.manager:startRecording(currentLang())
 
   if ok then
-    self.logger:info(self.icons.recording .. " Recording started (" .. currentLang() .. ")", true)
+    local abbrev = activeFilterAbbrev()
+    local msg = self.icons.recording .. " Recording started (" .. currentLang() .. ")"
+    if abbrev then
+      msg = msg .. " [" .. abbrev .. "]"
+    end
+    self.logger:info(msg, true)
     startRecordingSession()
   else
     local errorMsg = "❌ Recording failed: " .. tostring(err)
