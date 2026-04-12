@@ -179,7 +179,7 @@ function Manager:startRecording(lang)
   end
 
   -- Show feedback
-  Notifier.show("recording", "info", "Recording started")
+  Notifier.show("recording", "debug", "Recording started")
 
   return true, nil
 end
@@ -223,7 +223,7 @@ function Manager:stopRecording()
   end
 
   -- Show feedback
-  Notifier.show("recording", "info", "Recording stopped, transcribing...")
+  Notifier.show("recording", "debug", "Recording stopped, transcribing...")
 
   -- Check completion now that we're in TRANSCRIBING state.
   -- The recorder's onComplete callback may have already fired (setting
@@ -388,9 +388,9 @@ function Manager:_finalize()
   else
     if hs and hs.pasteboard then
       hs.pasteboard.setContents(finalText)
-      Notifier.show("transcription", "info", "Transcription complete! Copied to clipboard.")
+      Notifier.show("transcription", "debug", "Transcription complete! Copied to clipboard.")
     else
-      Notifier.show("transcription", "info", "Transcription complete: " .. finalText)
+      Notifier.show("transcription", "debug", "Transcription complete: " .. finalText)
     end
     transitionToIdle()
   end

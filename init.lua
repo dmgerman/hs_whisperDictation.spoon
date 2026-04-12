@@ -1089,7 +1089,7 @@ function obj:start()
     applyFilter(finalText, function(filtered)
       hs.pasteboard.setContents(filtered)
       local Notifier = dofile(spoonPath .. "lib/notifier.lua")
-      Notifier.show("transcription", "info", "Transcription complete! Copied to clipboard.")
+      Notifier.show("transcription", "debug", "Transcription complete! Copied to clipboard.")
       transitionToIdle()
     end)
   end
