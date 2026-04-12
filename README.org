@@ -250,13 +250,15 @@ print(corrected_text)
 
 ** Included Script: query-model.py
 
-The spoon ships with =scripts/query-model.py=, a versatile LLM query tool that works as a filter. It auto-detects available backends (local LM Studio or ChatGPT) and supports three modes:
+The spoon ships with [[./scripts/query-model.py]], a versatile LLM query tool that works as a filter. It auto-detects available backends (local LM Studio or ChatGPT) and supports three modes:
 
 | Mode     | Description                        |
 |----------+------------------------------------|
 | =answer= | Answer a question succinctly       |
 | =filter= | Apply a custom prompt to the input |
 | =raw=    | Send input as-is to the LLM       |
+
+See [[./scripts/readme.md]] for further information.
 
 *Requirements:* =pip install requests=, and either a local LLM (e.g., LM Studio on port 1234) or an OpenAI API key stored in =~/.authinfo.gpg=.
 

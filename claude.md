@@ -3,6 +3,8 @@
 ## Code Quality Standards
 
 - **CRITICAL: All filenames MUST be lowercase** - Use `readme.md`, NOT `README.md`
+- **CRITICAL: Update documentation when features change** - Any time a feature is added, modified, or removed, update `readme.org` and any relevant docs. Documentation is not a separate task — it is part of completing the feature.
+- **CRITICAL: Do not commit or push without user approval** - Never auto-commit after making changes. Wait for the user to review the changes and explicitly ask to commit. The user needs a chance to inspect diffs, test behavior, and provide feedback before anything is committed.
 - Always document with LuaDoc format
 - Use option-style returns for "fallible" functions where appropriate
 
