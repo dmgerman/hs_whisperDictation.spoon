@@ -262,11 +262,18 @@ print(corrected_text)
 #+begin_src lua
 -- Define available filters
 wd.whisperFilters = {
-  { name = "Display Name", cmd = "shell-command-here" },
+  { name = "Display Name", abbrev = "DN", cmd = "shell-command-here" },
+  { name = "Another Filter", cmd = "other-command" },  -- abbrev is optional
 }
 
 -- Filters can use full paths or commands in PATH
 -- The command runs in a login shell (/bin/zsh -l) so your PATH is available
+--
+-- Fields:
+--   name   (required) - Display name in chooser
+--   cmd    (required) - Shell command (reads stdin, writes stdout)
+--   abbrev (optional) - Short label shown in menubar and alerts (e.g., "CLN", "GPT")
+--                       If omitted, no indicator is shown in the menubar
 #+end_src
 
 *** Error Handling
