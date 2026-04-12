@@ -1,5 +1,5 @@
 #+title: WhisperDictation - Voice to Text for Mac
-#+author: dmg
+#+author: Daniel M. German
 #+date: 2026
 
 Speak and see your words appear as text. Works offline, supports 100+ languages, and puts privacy first.
@@ -9,8 +9,8 @@ Speak and see your words appear as text. Works offline, supports 100+ languages,
 *This version has been completely rearchitected* for better reliability and maintainability:
 - New callback-based architecture (simpler, more testable)
 - Improved error handling and state management
+- Post-transcription filters (pipe text through shell commands or LLMs)
 - 600+ comprehensive tests
-- Post-transcription filters (pipe text through shell commands)
 
 *Breaking changes from v1.x:*
 - Configuration API changed (see examples below)
@@ -26,41 +26,30 @@ If upgrading from v1.x, you'll need to update your configuration.
 2. *Speak* your text
 3. *Press the hotkey again* to stop
 4. *Get your text* - either pasted automatically or copied to clipboard
-5. Optionally, *apply a filter* (e.g., grammar fix, translation) before the text reaches clipboard
-
-That's it!
+5. Optionally, *apply a filter* (e.g., grammar fix, translation, LLM query) before the text reaches clipboard
 
 * Quick Start
 
 ** 1. Choose Your Setup
 
-Pick based on what you value most:
-
 *** 🔒 *Private & Offline* (Apple Silicon Macs - Recommended)
 
 #+begin_src lua
--- Add to ~/.hammerspoon/init.lua
 local wd = hs.loadSpoon("hs_whisperDictation")
 
--- Configure
 wd.config = {
   recorder = "sox",           -- Simple recording
   transcriber = "whisperkit", -- Apple optimized, local
 }
 
--- Set your hotkey (Ctrl+Cmd+D)
 wd:bindHotKeys({
-  toggle = {{"ctrl", "cmd"}, "d"}
+  toggle = {{"ctrl", "cmd"}, "d"},
 })
 
 wd:start()
 #+end_src
 
 *Install:* =brew install sox whisperkit-cli=
-
-*Pros:* 100% private, offline, Apple Silicon optimized, fast
-
-*Cons:* Requires Mac with M1/M2/M3/M4 chip
 
 *** ⚡ *Pro Setup* (Fastest Transcription)
 
@@ -70,13 +59,11 @@ local wd = hs.loadSpoon("hs_whisperDictation")
 wd.config = {
   recorder = "streaming",        -- Smart recording with VAD
   transcriber = "whisperserver", -- Fastest transcription
-  whisperserver = {
-    port = "8080"
-  }
+  whisperserver = { port = "8080" },
 }
 
 wd:bindHotKeys({
-  toggle = {{"ctrl", "cmd"}, "d"}
+  toggle = {{"ctrl", "cmd"}, "d"},
 })
 
 wd:start()
@@ -85,22 +72,15 @@ wd:start()
 *Install:*
 
 #+begin_src bash
-# Install whisper.cpp server
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp
+# Install streaming recorder dependencies
+pip install sounddevice scipy torch
+
+# Build and run whisper.cpp server
+git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp
 make server
 ./models/download-ggml-model.sh large-v3
-
-# Run server (in background)
 ./server -m models/ggml-large-v3.bin -p 8080 &
-
-# Install streaming recorder
-pip install sounddevice scipy torch
 #+end_src
-
-*Pros:* Fastest transcription, real-time chunk processing, intelligent silence detection
-
-*Cons:* Significant memory usage (model stays in RAM), more complex setup
 
 ** 2. Set Your Language
 
@@ -110,31 +90,21 @@ wd.languages = {"en"}  -- English only
 wd.languages = {"en", "ja", "es", "fr"}  -- English, Japanese, Spanish, French
 #+end_src
 
-Press *Ctrl+Cmd+L* to switch languages while running.
-
 ** 3. Test It
 
-1. Press *Ctrl+Cmd+D* (or your chosen hotkey)
-2. See the menubar icon change (🎙️ recording indicator)
+1. Press your toggle hotkey
+2. A sound wave overlay appears on screen while recording
 3. Speak: "Hello world, this is a test"
-4. Press *Ctrl+Cmd+D* again
+4. Press the hotkey again
 5. Your text appears in the clipboard - paste it anywhere!
 
-* Common Use Cases
+* Features
 
-** Copy to Clipboard
+** Copy to Clipboard (Default)
 
-Default behavior - transcribed text goes to clipboard.
+Press hotkey → Speak → Press hotkey → Paste (Cmd+V).
 
-#+begin_src lua
-wd:bindHotKeys({
-  toggle = {{"ctrl", "cmd"}, "d"}
-})
-#+end_src
-
-*Usage:* Press hotkey → Speak → Press hotkey → Paste (Cmd+V)
-
-** Auto-Paste (Beta)
+** Auto-Paste
 
 Text automatically pastes if you don't type/click during recording.
 
@@ -143,162 +113,196 @@ wd.monitorUserActivity = true
 
 wd:bindHotKeys({
   toggle = {{"ctrl", "cmd"}, "d"},      -- Copy mode
-  togglePaste = {{"ctrl", "cmd"}, "p"}  -- Auto-paste mode
+  togglePaste = {{"ctrl", "cmd"}, "p"}, -- Auto-paste mode
 })
 #+end_src
 
-*Usage:* Press *Ctrl+Cmd+P* → Speak → Press *Ctrl+Cmd+P* → Text auto-pastes!
+*Auto-pastes when:* you stayed in the same app, didn't type, didn't click.
 
-*When it auto-pastes:*
-- ✅ You stayed in the same app
-- ✅ You didn't type anything
-- ✅ You didn't click the mouse
-
-*When it just copies to clipboard:*
-- ⚠️ You typed something
-- ⚠️ You clicked the mouse
-- ⚠️ You switched to a different app
+*Copies to clipboard instead when:* you typed, clicked, or switched apps.
 
 ** Multiple Languages
-
-Switch on the fly:
 
 #+begin_src lua
 wd.languages = {"en", "ja", "es"}
 
 wd:bindHotKeys({
   toggle = {{"ctrl", "cmd"}, "d"},
-  nextLang = {{"ctrl", "cmd"}, "l"}  -- Switch language
+  nextLang = {{"ctrl", "cmd"}, "l"},
 })
 #+end_src
 
-*Usage:* Press *Ctrl+Cmd+L*, choose language, then record
+Press the =nextLang= hotkey to open a chooser and switch languages.
 
 ** Retranscription
 
-Sometimes you want to re-transcribe a recording with a different transcriber, or retry a failed transcription.
-
-*** Basic Usage
+Re-transcribe a previous recording with a different transcriber or language.
 
 #+begin_src lua
 wd:bindHotKeys({
   toggle = {{"ctrl", "cmd"}, "d"},
-  retranscribe = {{"ctrl", "cmd"}, "r"},  -- Add this
+  retranscribe = {{"ctrl", "cmd"}, "r"},
+})
+
+-- Optional: use a specific transcriber for retranscription
+wd.retranscribeTranscriber = "whisperkit"  -- or nil to use current
+wd.retranscribeCount = 15  -- recent recordings shown (default: 10)
+#+end_src
+
+Press the =retranscribe= hotkey, pick a recent recording from the chooser, and it will be retranscribed with the current language.
+
+** Abort
+
+Cancel the current recording or transcription and return to idle.
+
+#+begin_src lua
+wd:bindHotKeys({
+  toggle = {{"ctrl", "cmd"}, "d"},
+  abort = {{"ctrl", "cmd"}, "a"},
 })
 #+end_src
 
-Press *Ctrl+Cmd+R*, pick a recent recording from the chooser, and it will be retranscribed with the current language.
+Works from any state:
+- *While recording:* stops the recorder and discards the audio
+- *While transcribing:* cancels pending transcriptions
+- *While idle:* does nothing
 
-*** Configuration
+** Custom Callback
+
+Instead of clipboard, do whatever you want with the text:
 
 #+begin_src lua
--- Use a specific transcriber for retranscription
-wd.retranscribeTranscriber = "whisperkit"  -- or nil to use current
-
--- Number of recent recordings to show in chooser
-wd.retranscribeCount = 15  -- default is 10
+wd:toggleTranscribe(function(text)
+  print("You said: " .. text)
+  -- Save to file, post to webhook, send to app, etc.
+end)
 #+end_src
 
-*** Auto-Paste Behavior
-
-- If you stay in the same app: text auto-pastes
-- If you switch apps: text copies to clipboard only
-
-*** Use Cases
-
-- Original transcription failed or had errors
-- Want to try a more accurate transcriber (e.g., WhisperKit instead of WhisperCLI)
-- Want to re-transcribe old recordings with current language setting
-
-** Post-Transcription Filters
+* Post-Transcription Filters
 
 Pipe your transcription through any shell command before it goes to clipboard. Filters read from stdin and write to stdout.
 
-*** Basic Usage
+** Basic Usage
 
 #+begin_src lua
 wd.whisperFilters = {
-  { name = "Fix Grammar", cmd = "grammar-fix" },
+  { name = "Fix Grammar", abbrev = "CLN", cmd = "grammar-fix" },
   { name = "Translate to Spanish", cmd = "translate-es" },
-  { name = "Ask ChatGPT", cmd = "~/bin/chatgpt-answer-question.py" },
 }
 
 wd:bindHotKeys({
   toggle = {{"ctrl", "cmd"}, "d"},
-  selectFilter = {{"ctrl", "cmd"}, "f"},  -- Open filter picker
+  selectFilter = {{"ctrl", "cmd"}, "f"},
 })
 #+end_src
 
-Press *Ctrl+Cmd+F* to open the filter chooser. Select a filter and it stays active for all subsequent recordings until you change it. Choose "No Filter" to return to raw transcription.
+Press the =selectFilter= hotkey to open the filter chooser. The selected filter stays active for all subsequent recordings until you change it. Choose "No Filter" to return to raw transcription.
 
-*** How It Works
+When a filter with an =abbrev= is active, the abbreviation is shown in the menubar and recording alerts (e.g., =🎤 (en) [CLN]=).
+
+** How It Works
 
 1. Record and transcribe as normal
 2. If a filter is active, the transcribed text is piped through the filter command
 3. The filtered output replaces the original text in the clipboard
-4. If the filter fails (non-zero exit, empty output, script not found), the original unfiltered text is used instead and a warning is shown
+4. If the filter fails, the original unfiltered text is used instead and a warning is shown
 
-*** Writing a Filter Script
+** Filter Configuration
+
+#+begin_src lua
+wd.whisperFilters = {
+  { name = "Display Name", abbrev = "DN", cmd = "shell-command-here" },
+  { name = "Another Filter", cmd = "other-command" },
+}
+#+end_src
+
+Fields:
+- =name= (required) — Display name in the chooser
+- =cmd= (required) — Shell command that reads stdin and writes to stdout
+- =abbrev= (optional) — Short label shown in menubar and alerts (e.g., "CLN", "GPT"). If omitted, no indicator is shown.
+
+The command runs in a login shell (=/bin/zsh -l=) so your full PATH is available.
+
+** Writing a Filter Script
 
 A filter is any command that reads stdin and writes to stdout:
 
 #+begin_src bash
 #!/bin/bash
-# ~/bin/uppercase-filter.sh
+# Simple: uppercase everything
 tr '[:lower:]' '[:upper:]'
 #+end_src
 
 #+begin_src python
 #!/usr/bin/env python3
-# ~/bin/grammar-fix.py
 import sys
 text = sys.stdin.read()
 # ... process text ...
 print(corrected_text)
 #+end_src
 
-*** Configuration
+** Error Handling
+
+- *Script not found:* original text is used, warning alert shown
+- *Non-zero exit code:* original text is used, warning alert shown with stderr
+- *Empty output:* original text is used
+- *Script hangs:* original text will eventually be used (no timeout currently)
+
+** Included Script: query-model.py
+
+The spoon ships with =scripts/query-model.py=, a versatile LLM query tool that works as a filter. It auto-detects available backends (local LM Studio or ChatGPT) and supports three modes:
+
+| Mode     | Description                        |
+|----------+------------------------------------|
+| =answer= | Answer a question succinctly       |
+| =filter= | Apply a custom prompt to the input |
+| =raw=    | Send input as-is to the LLM       |
+
+*Requirements:* =pip install requests=, and either a local LLM (e.g., LM Studio on port 1234) or an OpenAI API key stored in =~/.authinfo.gpg=.
+
+*Example filter configuration:*
 
 #+begin_src lua
--- Define available filters
-wd.whisperFilters = {
-  { name = "Display Name", abbrev = "DN", cmd = "shell-command-here" },
-  { name = "Another Filter", cmd = "other-command" },  -- abbrev is optional
-}
+-- Use the spoon's bundled script
+local spoonPath = hs.spoons.resourcePath("hs_whisperDictation")
+local qm = spoonPath .. "/scripts/query-model.py"
 
--- Filters can use full paths or commands in PATH
--- The command runs in a login shell (/bin/zsh -l) so your PATH is available
---
--- Fields:
---   name   (required) - Display name in chooser
---   cmd    (required) - Shell command (reads stdin, writes stdout)
---   abbrev (optional) - Short label shown in menubar and alerts (e.g., "CLN", "GPT")
---                       If omitted, no indicator is shown in the menubar
+wd.whisperFilters = {
+  { name = "Clean grammar", abbrev = "CLN",
+    cmd = qm .. " filter -p 'Correct the grammar, only respond with the corrected text'" },
+  { name = "Answer question", abbrev = "ANS",
+    cmd = qm .. " answer" },
+  { name = "Make checklist", abbrev = "LST",
+    cmd = qm .. " filter -p 'Format as an org-mode checklist'" },
+}
 #+end_src
 
-*** Error Handling
+*Backend selection:*
 
-- *Script not found:* Original text is used, warning alert shown
-- *Non-zero exit code:* Original text is used, warning alert shown with stderr
-- *Empty output:* Original text is used
-- *Script hangs:* Original text will eventually be used (no timeout currently)
+#+begin_src bash
+# Auto-detect (tries local first, then ChatGPT)
+scripts/query-model.py answer "What is Lua?"
+
+# Force local LLM only
+scripts/query-model.py --backend local answer "What is Lua?"
+
+# Force ChatGPT
+scripts/query-model.py --backend chatgpt filter -p "Translate to Spanish"
+#+end_src
+
+Run =scripts/query-model.py --help= for full usage.
 
 * Transcription Methods
 
-| Method        | What it is                       | Speed      | Privacy    | Best for                       |
-|---------------+----------------------------------+------------+------------+--------------------------------|
-| *whisperkit*    | Apple Neural Engine on your Mac  | ⚡⚡ Fast  | 100% local | Privacy-conscious Mac users    |
-| *whispercli*    | Whisper on CPU/GPU               | ⚡ Slower  | 100% local | Non-Apple Silicon Macs         |
-| *whisperserver* | Local HTTP server (model in RAM) | ⚡⚡ Fast* | 100% local | Heavy users (*after first use) |
+| Method          | What it is                       | Speed     | Privacy    | Best for                     |
+|-----------------+----------------------------------+-----------+------------+------------------------------|
+| =whisperkit=    | Apple Neural Engine on your Mac  | ⚡⚡ Fast | 100% local | Apple Silicon Mac users      |
+| =whispercli=    | Whisper on CPU/GPU               | ⚡ Slower | 100% local | Non-Apple Silicon Macs       |
+| =whisperserver= | Local HTTP server (model in RAM) | ⚡⚡ Fast | 100% local | Heavy users (model stays loaded) |
 
 ** whisperkit (Apple Silicon - Recommended)
 
-| What it is | Uses Apple's Neural Engine on your Mac               |
-| Speed      | ⚡⚡ Fast                                              |
-| Privacy    | 100% local, nothing leaves your Mac                  |
-| Best for   | Privacy-conscious Mac users with Apple Silicon       |
-
-*Setup:*
+Uses Apple's Neural Engine. 100% local, nothing leaves your Mac.
 
 #+begin_src bash
 brew install whisperkit-cli
@@ -312,18 +316,11 @@ wd.config = {
 
 ** whispercli (CPU/GPU)
 
-| What it is | Runs Whisper on your CPU/GPU                         |
-| Speed      | ⚡ Slower                                             |
-| Privacy    | 100% local                                           |
-| Best for   | Non-Apple Silicon Macs                               |
-
-*Setup:*
+Runs Whisper on CPU/GPU. 100% local. Works on any Mac.
 
 #+begin_src bash
 brew install whisper-cli
-# Download model
-mkdir -p /usr/local/whisper
-cd /usr/local/whisper
+mkdir -p /usr/local/whisper && cd /usr/local/whisper
 wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 #+end_src
 
@@ -331,30 +328,19 @@ wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 wd.config = {
   transcriber = "whispercli",
   whispercli = {
-    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
-  }
+    modelPath = "/usr/local/whisper/ggml-large-v3.bin",
+  },
 }
 #+end_src
 
 ** whisperserver (HTTP Server)
 
-| What it is | Local HTTP server (model stays loaded in RAM)       |
-| Speed      | ⚡⚡ Fast after first use                             |
-| Privacy    | 100% local                                           |
-| Best for   | Heavy users (model stays in RAM between uses)        |
-
-*Setup:*
+Local HTTP server — model stays loaded in RAM between uses. Fast after first load.
 
 #+begin_src bash
-# Install whisper.cpp server
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp
+git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp
 make server
-
-# Download model
 ./models/download-ggml-model.sh large-v3
-
-# Run server (in background)
 ./server -m models/ggml-large-v3.bin -p 8080 &
 #+end_src
 
@@ -363,27 +349,25 @@ wd.config = {
   transcriber = "whisperserver",
   whisperserver = {
     host = "127.0.0.1",
-    port = "8080"
-  }
+    port = "8080",
+  },
 }
 #+end_src
 
 * Recording Backends
 
-| Backend   | What it is                          | When to use                     |
-|-----------+-------------------------------------+---------------------------------|
-| *sox*       | Records one file per session        | Simple needs, fallback option   |
-| *streaming* | Real-time with smart chunking (VAD) | Long dictations, faster results |
+| Backend     | What it is                          | When to use                     |
+|-------------+-------------------------------------+---------------------------------|
+| =sox=       | Records one file per session        | Simple needs, reliable          |
+| =streaming= | Real-time with smart chunking (VAD) | Long dictations, faster results |
 
-*streaming* is in beta-testing. *sox* should be used if you want utmost reliability.
+** sox (Simple - Recommended)
 
-** sox (Simple - Recommended for Beginners)
+Records one audio file per session. Reliable and straightforward.
 
-*What it is:* Records one file per session
-
-*When to use:* Simple needs, fallback option
-
-*Install:* =brew install sox=
+#+begin_src bash
+brew install sox
+#+end_src
 
 #+begin_src lua
 wd.config = {
@@ -391,19 +375,9 @@ wd.config = {
 }
 #+end_src
 
-** streaming (Smart - Advanced)
+** streaming (Smart - Beta)
 
-*What it is:* Real-time recording with smart chunking using Silero VAD
-
-*Features:*
-- Detects silence and creates chunks automatically
-- Transcribes while you're still talking
-- Faster overall for long recordings
-
-*When to use:* Long dictations, want faster results
-
-*Note: streaming* is in beta-testing. *sox* should be used if you want utmost reliability.
-
+Real-time recording with intelligent silence detection (Silero VAD). Creates chunks automatically and transcribes while you're still talking. The Python server pre-starts at initialization so the first recording starts instantly.
 
 #+begin_src bash
 pip install sounddevice scipy torch
@@ -414,50 +388,39 @@ wd.config = {
   recorder = "streaming",
   streaming = {
     silenceThreshold = 2.0,   -- Seconds of silence before chunk split
-    minChunkDuration = 3.0,   -- Minimum chunk length
-    maxChunkDuration = 600.0, -- Maximum chunk length
-  }
+    minChunkDuration = 3.0,   -- Minimum chunk length (seconds)
+    maxChunkDuration = 600.0, -- Maximum chunk length (seconds)
+  },
 }
 #+end_src
+
+*Note:* Streaming is in beta. Use =sox= if you want maximum reliability.
 
 * Configuration Reference
 
 ** Basic Settings
 
 #+begin_src lua
--- Languages
-wd.languages = {"en", "ja"}  -- Available languages
-wd.currentLang = "en"         -- Default language
-
--- Directories
-wd.tempDir = "/tmp/whisper_dict"  -- Where audio files are saved
-
--- Timeouts
-wd.timeoutSeconds = 1800  -- Auto-stop after 30 minutes (nil = no limit)
-
--- UI
-wd.showRecordingIndicator = true  -- Show sound wave overlay while recording
+wd.languages = {"en", "ja"}       -- Available languages
+wd.tempDir = "/tmp/whisper_dict"   -- Where audio files are saved
+wd.timeoutSeconds = 1800           -- Auto-stop after 30 minutes (nil = no limit)
+wd.showRecordingIndicator = true   -- Show sound wave overlay while recording
 #+end_src
 
-** Transcriber Configuration
+** Transcriber Settings
 
 #+begin_src lua
 wd.config = {
-  transcriber = "whisperkit",  -- or "whispercli" or "whisperserver"
+  transcriber = "whisperkit",  -- "whisperkit", "whispercli", or "whisperserver"
 
-  -- WhisperKit settings
   whisperkit = {
     cmd = "/opt/homebrew/bin/whisperkit-cli",
     model = "large-v3",
   },
-
-  -- Whisper CLI settings
   whispercli = {
     executable = "/opt/homebrew/bin/whisper-cli",
     modelPath = "/usr/local/whisper/ggml-large-v3.bin",
   },
-
-  -- Whisper Server settings
   whisperserver = {
     host = "127.0.0.1",
     port = "8080",
@@ -466,28 +429,23 @@ wd.config = {
 }
 #+end_src
 
-** Recorder Configuration
+** Recorder Settings
 
 #+begin_src lua
 wd.config = {
-  recorder = "streaming",  -- or "sox"
+  recorder = "streaming",  -- "sox" or "streaming"
 
-  -- Sox settings
   sox = {
     soxCmd = "/opt/homebrew/bin/sox",
-    audioInputDevice = nil,  -- nil = default device
-    tempDir = nil,           -- nil = use wd.tempDir
+    audioInputDevice = nil,  -- nil = system default
   },
-
-  -- Streaming settings
   streaming = {
-    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+    pythonPath = "/usr/bin/python3",
     tcpPort = 12341,
-    audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
-    silenceThreshold = 2.0,  -- Seconds of silence to trigger chunk boundary
-    minChunkDuration = 3.0,  -- Minimum chunk duration (seconds)
-    maxChunkDuration = 600.0, -- Maximum chunk duration (seconds)
-    tempDir = nil,           -- nil = use wd.tempDir
+    audioInputDevice = nil,
+    silenceThreshold = 2.0,
+    minChunkDuration = 3.0,
+    maxChunkDuration = 600.0,
   },
 }
 #+end_src
@@ -495,9 +453,25 @@ wd.config = {
 ** Auto-Paste Settings
 
 #+begin_src lua
-wd.monitorUserActivity = true  -- Enable activity monitoring
-wd.autoPasteDelay = 0.1         -- Delay before pasting (seconds)
-wd.pasteWithEmacsYank = false   -- Use Ctrl-Y for Emacs (if true)
+wd.monitorUserActivity = true  -- Block paste if user was active during recording
+wd.autoPasteDelay = 0.1        -- Seconds to wait before pasting
+wd.pasteWithEmacsYank = false  -- Use Ctrl-Y instead of Cmd-V for Emacs
+#+end_src
+
+** Filter Settings
+
+#+begin_src lua
+wd.whisperFilters = {
+  { name = "Clean grammar", abbrev = "CLN", cmd = "my-grammar-script" },
+}
+-- activeFilter is managed by the chooser; no need to set it manually
+#+end_src
+
+** Retranscription Settings
+
+#+begin_src lua
+wd.retranscribeTranscriber = "whisperkit"  -- or nil to use current transcriber
+wd.retranscribeCount = 10                   -- recent recordings shown in chooser
 #+end_src
 
 ** Available Hotkeys
@@ -515,63 +489,40 @@ wd:bindHotKeys({
 
 All hotkeys are optional. Only bind the ones you need.
 
-** Aborting a Recording or Transcription
-
-Press the =abort= hotkey to cancel the current operation and return to idle. Works from any state:
-- *While recording:* stops the recorder and discards the audio
-- *While transcribing:* cancels pending transcriptions
-- *While idle:* does nothing (no error)
-
 * Troubleshooting
 
 ** "No audio recorded"
 
-*Fix:*
 1. Check microphone permissions: System Settings → Privacy & Security → Microphone → Enable Hammerspoon
 2. Check microphone selection: System Settings → Sound → Input → Choose your mic
-3. Test recording: =sox -d test.wav= (speak for 5 seconds, then Ctrl+C), then =afplay test.wav=
+3. Test recording: =sox -d test.wav= (speak for 5 seconds, Ctrl+C), then =afplay test.wav=
 
 ** "Empty transcription"
 
-*Fix:*
 1. Verify audio file: =ls -lh /tmp/whisper_dict/*.wav= (should be >100KB)
 2. Play recording: =afplay /tmp/whisper_dict/en-*.wav | tail -1=
 3. If silent, check microphone in System Settings
 
 ** "Streaming server won't start"
 
-*Fix:*
-
 #+begin_src bash
-# Check if port is in use
-lsof -i :12341
-
-# Kill zombie process if needed
-lsof -ti:12341 | xargs kill -9
-
-# Check Python dependencies
-pip list | grep -E "sounddevice|torch|scipy"
+lsof -i :12341                              # Check if port is in use
+lsof -ti:12341 | xargs kill -9              # Kill zombie process
+pip list | grep -E "sounddevice|torch|scipy" # Check Python deps
 #+end_src
 
 ** "Whisper command not found"
 
-*Fix:*
-
 #+begin_src bash
-# For WhisperKit
-brew install whisperkit-cli
-
-# For Whisper CLI
-brew install whisper-cli
-
-# For sox
-brew install sox
+brew install whisperkit-cli  # For WhisperKit
+brew install whisper-cli     # For WhisperCLI
+brew install sox             # For Sox recorder
 #+end_src
 
-** Check what's happening
+** Debugging in Hammerspoon Console
 
 #+begin_src lua
--- In Hammerspoon console (Cmd+Opt+Ctrl+C)
+-- Open console: Cmd+Opt+Ctrl+C
 
 -- Check current status
 print(hs.inspect(wd:getStatus()))
@@ -579,154 +530,23 @@ print(hs.inspect(wd:getStatus()))
 -- List recent recordings
 print(hs.execute("ls -lht /tmp/whisper_dict/*.wav | head -5"))
 
--- Play most recent
+-- Play most recent recording
 latest = hs.execute("ls -t /tmp/whisper_dict/*.wav | head -1"):gsub("\n", "")
 hs.execute("afplay " .. latest)
 #+end_src
 
-* Advanced: Custom Callback
-
-Instead of clipboard, do whatever you want with the text:
-
-#+begin_src lua
-wd:toggleTranscribe(function(text)
-  -- Your custom code here
-  print("You said: " .. text)
-
-  -- Examples:
-  -- Send to app
-  hs.urlevent.openURL("myapp://text?content=" .. hs.http.encodeForQuery(text))
-
-  -- Save to file
-  local f = io.open("/tmp/dictation.txt", "a")
-  f:write(text .. "\n")
-  f:close()
-
-  -- Post to webhook
-  hs.http.doRequest("https://myserver.com/api", "POST", text)
-end)
-#+end_src
-
-* Recommended Configurations
-
-** Best for Beginners (Apple Silicon)
-
-#+begin_src lua
-wd.config = {
-  recorder = "sox",
-  transcriber = "whisperkit",
-}
-#+end_src
-
-** Best for Privacy (Apple Silicon)
-
-#+begin_src lua
-wd.config = {
-  recorder = "sox",
-  transcriber = "whisperkit",
-}
-#+end_src
-
-** Best for Speed & Long Recordings (Apple Silicon)
-
-#+begin_src lua
-wd.config = {
-  recorder = "streaming",
-  transcriber = "whisperkit",
-}
-#+end_src
-
-** Best for Non-Apple Silicon Macs
-
-#+begin_src lua
-wd.config = {
-  recorder = "sox",
-  transcriber = "whispercli",
-  whispercli = {
-    modelPath = "/usr/local/whisper/ggml-large-v3.bin"
-  }
-}
-#+end_src
-
-** Best for Heavy Users (Local, Fast)
-
-#+begin_src lua
-wd.config = {
-  recorder = "streaming",
-  transcriber = "whisperserver",
-  whisperserver = {
-    port = "8080"
-  }
-}
-#+end_src
-
-** My own
-
-- I keep both the recorder and transcriber in memory (after first use).
-
-#+begin_src lua   :exports both
-
-  local wd = hs.loadSpoon("hs_whisperDictation")
-  wd.languages = {"en", "ja", "es"}
-  wd.monitorUserActivity = true
-  wd.pasteWithEmacsYank = true
-
-  -- New Architecture (v2) configuration
-  wd.config.recorder = 'streaming'  -- Use StreamingRecorder with Python server
-  wd.config.transcriber = 'whisperserver'  -- Use WhisperServer transcriber
-  wd.config.retranscriber = 'whisperkit'  -- I find whisperkit to be more precise
-
-  -- Configure StreamingRecorder
-  wd.config.streaming = {
-    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
-    audioInputDevice = nil,  -- nil = default device
-    silenceThreshold = 3.0,  -- 3 seconds of silence to trigger chunk
-    minChunkDuration = 5.0,  -- 5 seconds minimum before chunking
-    maxChunkDuration = 600.0,  -- 10 minutes maximum
-    perfectSilenceDuration = 0,  -- 0 = disabled (don't stop on silence at startup)
-    tcpPort = 12341,
-  }
-
-  -- Configure WhisperServer transcriber
-  wd.config.whisperserver = {
-    executable = os.getenv("HOME") .. "/.emacs.d/modules/whisper-cli/build/bin/whisper-server",
-    modelPath = "/usr/local/whisper/ggml-model.bin",  -- Update this path to your actual model
-    host = "127.0.0.1",
-    port = 8080,
-    startupTimeout = 10,
-  }
-
-  wd:bindHotKeys({
-      toggle = {{"cmd", "alt", "ctrl"}, "l"},
-      togglePaste = {{}, "F15"},
-      nextLang = {{"cmd", "alt", "ctrl"}, ";"},
-      retranscribe = {{"cmd", "alt", "ctrl"}, "'"},
-      selectFilter = {{}, "F13"},
-  })
-
-  -- Post-transcription filters (optional)
-  wd.whisperFilters = {
-    { name = "chatGPT answer question", cmd = os.getenv("HOME") .. "/bin/chatgpt-answer-question.py" },
-  }
-
-  wd:start()
-
-#+end_src
-
 * Privacy & Security
 
-*What stays on your Mac:*
-- All configurations
-- All recordings (in =/tmp/whisper_dict/=)
-- All transcriptions (100% local processing)
+*Everything stays on your Mac:*
+- All configurations, recordings, and transcriptions are 100% local
+- No telemetry, no tracking, no cloud services
 
-*What leaves your Mac:*
-- Nothing - no telemetry, no tracking, no cloud services
+*Note on filters:* If you configure a filter that calls an external API (e.g., ChatGPT via =query-model.py --backend chatgpt=), your transcribed text will be sent to that service. Use =--backend local= or local-only filters to keep everything private.
 
 *To maximize privacy:*
-- Use =whisperkit= or =whispercli= transcription
-- Use =sox= or =streaming= recording backend
-- Audio stays 100% local, always
+- Use =whisperkit= or =whispercli= for transcription (100% local)
+- Use filters that run locally (e.g., =--backend local= with LM Studio)
+- Audio files are never sent anywhere — only transcribed text can be sent to filters
 
 * License
 
@@ -734,6 +554,6 @@ MIT License - See LICENSE file
 
 * For Developers
 
-- [[file:docs/architecture.md][Architecture Documentation]] - Current v2.0 architecture
-- [[file:docs/testing.md][Testing Guide]] - 600+ tests
-- [[file:recorders/streaming/whisper_stream.md][Streaming Recorder Documentation]] - Python VAD server
+- [[file:docs/architecture.md][Architecture Documentation]] - v2.0 architecture and design principles
+- [[file:docs/testing.md][Testing Guide]] - 600+ tests (546 Lua + 69 Python + live integration)
+- [[file:recorders/streaming/whisper_stream.md][Streaming Recorder Documentation]] - Python VAD server details
