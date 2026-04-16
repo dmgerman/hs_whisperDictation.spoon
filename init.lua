@@ -105,7 +105,7 @@ obj.config = {
   },
 
   streaming = {
-    pythonPath = os.getenv("HOME") .. "/.config/dmg/python3.12/bin/python3",
+    pythonPath = os.getenv("HOME") .. "/.config/dmg/python/bin/python3",
     serverScript = nil,  -- nil = auto-detect from spoon directory
     tcpPort = 12341,
     audioInputDevice = nil,  -- nil = default device, or "BlackHole 2ch" for tests
