@@ -73,7 +73,10 @@ wd:start()
 
 #+begin_src bash
 # Install streaming recorder dependencies
-pip install sounddevice scipy torch
+pip install numpy sounddevice scipy torch torchaudio
+
+# Verify all dependencies are installed
+python3 /path/to/hs_whisperDictation.spoon/recorders/streaming/whisper_stream.py --check-deps
 
 # Build and run whisper.cpp server
 git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp
@@ -382,7 +385,7 @@ wd.config = {
 Real-time recording with intelligent silence detection (Silero VAD). Creates chunks automatically and transcribes while you're still talking. The Python server pre-starts at initialization so the first recording starts instantly.
 
 #+begin_src bash
-pip install sounddevice scipy torch
+pip install numpy sounddevice scipy torch torchaudio
 #+end_src
 
 #+begin_src lua
@@ -510,7 +513,8 @@ All hotkeys are optional. Only bind the ones you need.
 #+begin_src bash
 lsof -i :12341                              # Check if port is in use
 lsof -ti:12341 | xargs kill -9              # Kill zombie process
-pip list | grep -E "sounddevice|torch|scipy" # Check Python deps
+pip list | grep -E "numpy|sounddevice|torch|torchaudio|scipy" # Check Python deps
+python3 path/to/whisper_stream.py --check-deps                # Or use built-in check
 #+end_src
 
 ** "Whisper command not found"

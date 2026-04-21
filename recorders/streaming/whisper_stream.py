@@ -155,6 +155,11 @@ def check_dependencies():
     missing = []
 
     try:
+        import numpy
+    except ImportError:
+        missing.append("numpy (install: pip install numpy)")
+
+    try:
         import sounddevice
     except ImportError:
         missing.append("sounddevice (install: pip install sounddevice)")
@@ -174,7 +179,13 @@ def check_dependencies():
         pass
 
     if not has_torch and not has_onnx:
-        missing.append("torch or onnxruntime (install: pip install torch OR pip install onnxruntime)")
+        missing.append("torch or onnxruntime (install: pip install torch torchaudio OR pip install onnxruntime)")
+
+    if has_torch:
+        try:
+            import torchaudio
+        except ImportError:
+            missing.append("torchaudio (install: pip install torchaudio)")
 
     try:
         import scipy.io.wavfile

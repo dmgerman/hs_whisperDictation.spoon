@@ -90,6 +90,24 @@ function StreamingRecorder:validate()
     return false, "Server script not found at " .. self.serverScript
   end
 
+  -- Check Python dependencies via --check-deps
+  local resolvedPython = self:_resolvePythonPath()
+  local cmd = string.format('%s %s --check-deps 2>&1',
+    resolvedPython, self.serverScript)
+  local handle = io.popen(cmd)
+  if handle then
+    local output = handle:read("*a")
+    handle:close()
+    if output and output:match('"status":%s*"error"') then
+      local ok, data = pcall(hs.json.decode, output)
+      if ok and data and data.missing then
+        local missing = table.concat(data.missing, ", ")
+        return false, "Missing Python packages: " .. missing
+      end
+      return false, "Missing Python packages (run --check-deps for details)"
+    end
+  end
+
   return true, nil
 end
 
@@ -172,8 +190,18 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
     function(exitCode, stdOut, stdErr)
       -- Server exit callback
       print(string.format("[StreamingRecorder] Server exited: exitCode=%d", exitCode))
+      if stdErr and #stdErr > 0 then
+        print("[StreamingRecorder] Server stderr: " .. stdErr)
+      end
+      if stdOut and #stdOut > 0 then
+        print("[StreamingRecorder] Server stdout: " .. stdOut)
+      end
       if exitCode ~= 0 and self_ref._onError then
-        self_ref._onError("Server crashed with exit code " .. exitCode)
+        local errMsg = "Server crashed with exit code " .. exitCode
+        if stdErr and #stdErr > 0 then
+          errMsg = errMsg .. ": " .. stdErr:sub(1, 200)
+        end
+        self_ref._onError(errMsg)
       end
     end,
     args
@@ -183,10 +211,12 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
     return false, "Failed to create server process"
   end
 
-  -- Capture stderr to detect "listening" message
+  -- Capture stderr to detect "listening" message and collect error output
+  local capturedStderr = {}
   self.serverProcess:setStreamingCallback(function(task, stdOut, stdErr)
     if stdErr and #stdErr > 0 then
       print("[StreamingRecorder] Server: " .. stdErr)
+      table.insert(capturedStderr, stdErr)
 
       -- Check for listening message
       if stdErr:match('"status":%s*"listening"') then
@@ -217,6 +247,17 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
   local portListening = false
 
   while not portListening and not serverError and waited < timeoutMs do
+    -- Check if server process died early
+    if not self.serverProcess:isRunning() then
+      local stderrOutput = table.concat(capturedStderr, "\n")
+      if #stderrOutput > 0 then
+        serverError = "Server process exited immediately: " .. stderrOutput:sub(1, 300)
+      else
+        serverError = "Server process exited immediately (no output captured)"
+      end
+      break
+    end
+
     handle = io.popen(string.format("lsof -i :%d 2>/dev/null", self.tcpPort))
     if handle then
       result = handle:read("*a")
@@ -245,7 +286,12 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
       self.serverProcess:terminate()
       self.serverProcess = nil
     end
-    return false, "Server startup timeout (port not listening)"
+    local errMsg = "Server startup timeout (port not listening)"
+    local stderrOutput = table.concat(capturedStderr, "\n")
+    if #stderrOutput > 0 then
+      errMsg = errMsg .. ": " .. stderrOutput:sub(1, 300)
+    end
+    return false, errMsg
   end
 
   print("[StreamingRecorder] ✓ Server is listening on port " .. self.tcpPort)
