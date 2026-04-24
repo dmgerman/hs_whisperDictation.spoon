@@ -1273,12 +1273,12 @@ function obj:bindHotKeys(mapping)
     abort        = function() obj:abort() end,
   }
   local descriptions = {
-    toggle       = "Toggle whisper transcription [Audio]",
-    togglePaste  = "Toggle whisper transcription with auto-paste [Audio]",
-    nextLang     = "Select whisper language for transcription [Audio]",
-    retranscribe = "Retranscribe recent recording [Audio]",
-    selectFilter = "Select transcription filter [Audio]",
-    abort        = "Abort current recording/transcription [Audio]",
+    toggle       = "Toggle whisper transcription [Whisper]",
+    togglePaste  = "Toggle whisper transcription with auto-paste [Whisper]",
+    nextLang     = "Select whisper language for transcription [Whisper]",
+    retranscribe = "Retranscribe recent recording [Whisper]",
+    selectFilter = "Select transcription filter [Whisper]",
+    abort        = "Abort current recording/transcription [Whisper]",
   }
 
   local map = hs.fnutils.copy(mapping or obj.defaultHotkeys)
