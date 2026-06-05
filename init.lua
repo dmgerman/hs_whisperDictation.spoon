@@ -174,7 +174,7 @@ function Logger.new()
   self.logFile = os.getenv("HOME") .. "/.hammerspoon/Spoons/hs_whisperDictation/whisper.log"
   self.levels = {DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3}
   self.levelNames = {[0] = "DEBUG", [1] = "INFO", [2] = "WARN", [3] = "ERROR"}
-  self.currentLevel = self.levels.INFO
+  self.currentLevel = self.levels.WARN
   self.enableConsole = true
   self.enableFile = false
   return self

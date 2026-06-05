@@ -12,6 +12,8 @@ local IRecorder = dofile(spoonPath .. "recorders/i_recorder.lua")
 local StreamingRecorder = setmetatable({}, {__index = IRecorder})
 StreamingRecorder.__index = StreamingRecorder
 
+local logger = hs.logger.new("StreamingRecorder", "warning")
+
 --- Create a new StreamingRecorder instance
 ---
 --- @param config table Configuration
@@ -154,7 +156,7 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
   if handle then handle:close() end
 
   if result and #result > 0 then
-    print(string.format("[StreamingRecorder] Port %d in use, cleaning up...", self.tcpPort))
+    logger.i(string.format("Port %d in use, cleaning up...", self.tcpPort))
     os.execute(string.format("lsof -ti:%d | xargs kill -9 2>/dev/null", self.tcpPort))
     hs.timer.usleep(500000)  -- 500ms
   end
@@ -189,7 +191,7 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
     pythonPath,
     function(exitCode, stdOut, stdErr)
       -- Server exit callback
-      print(string.format("[StreamingRecorder] Server exited: exitCode=%d", exitCode))
+      logger.w(string.format("Server exited: exitCode=%d", exitCode))
       if stdErr and #stdErr > 0 then
         print("[StreamingRecorder] Server stderr: " .. stdErr)
       end
@@ -215,8 +217,8 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
   local capturedStderr = {}
   self.serverProcess:setStreamingCallback(function(task, stdOut, stdErr)
     if stdErr and #stdErr > 0 then
-      print("[StreamingRecorder] Server: " .. stdErr)
       table.insert(capturedStderr, stdErr)
+      logger.w("Server: " .. stdErr)
 
       -- Check for listening message
       if stdErr:match('"status":%s*"listening"') then
@@ -294,7 +296,7 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
     return false, errMsg
   end
 
-  print("[StreamingRecorder] ✓ Server is listening on port " .. self.tcpPort)
+  logger.i("✓ Server is listening on port " .. self.tcpPort)
   return true, nil
 end
 
@@ -358,15 +360,15 @@ function StreamingRecorder:_handleServerEvent(event, lang)
   local eventType = event.type
 
   if eventType == "server_ready" then
-    print("[StreamingRecorder] ✓ Server ready")
+    logger.i("✓ Server ready")
 
   elseif eventType == "recording_started" then
-    print("[StreamingRecorder] Recording started")
+    logger.i("Recording started")
 
   elseif eventType == "chunk_ready" then
     self._chunkCount = self._chunkCount + 1
 
-    print(string.format("[StreamingRecorder] Chunk %d ready: %s", event.chunk_num, event.audio_file))
+    logger.i(string.format("Chunk %d ready: %s", event.chunk_num, event.audio_file))
 
     -- Emit chunk immediately via callback
     if self._onChunk then
@@ -379,7 +381,7 @@ function StreamingRecorder:_handleServerEvent(event, lang)
     end
 
   elseif eventType == "recording_stopped" then
-    print("[StreamingRecorder] Recording stopped by server")
+    logger.i("Recording stopped by server")
     self._isRecording = false
 
     -- If recording was stopped (stopRecording called) and no final chunk received yet,
@@ -389,24 +391,24 @@ function StreamingRecorder:_handleServerEvent(event, lang)
     end
 
   elseif eventType == "error" then
-    print("[StreamingRecorder] Server error: " .. tostring(event.error))
+    logger.e("Server error: " .. tostring(event.error))
     if self._onError then
       self._onError(event.error)
     end
 
   elseif eventType == "silence_warning" then
     local message = event.message or "Microphone appears to be off"
-    print("[StreamingRecorder] Silence warning: " .. message)
+    logger.w("Silence warning: " .. message)
     if self._onError then
       self._onError(message)
     end
 
   elseif eventType == "complete_file" then
     -- Complete recording file saved (for auditing/debugging)
-    print("[StreamingRecorder] Complete file saved: " .. tostring(event.file_path))
+    logger.i("Complete file saved: " .. tostring(event.file_path))
 
   else
-    print("[StreamingRecorder] Unknown event type: " .. tostring(eventType))
+    logger.w("Unknown event type: " .. tostring(eventType))
   end
 end
 
@@ -485,7 +487,7 @@ function StreamingRecorder:_ensureServerRunning(outputDir, filenamePrefix)
   end
 
   self._serverStarting = false
-  print("[StreamingRecorder] ✓ Server started and connected")
+  logger.i("✓ Server started and connected")
   return true, nil
 end
 
@@ -496,7 +498,7 @@ end
 --- @return boolean success True if server started
 --- @return string|nil error Error message if failed
 function StreamingRecorder:warmup()
-  print("[StreamingRecorder] Warming up server...")
+  logger.i("Warming up server...")
   return self:_ensureServerRunning(self.tempDir, "warmup")
 end
 
@@ -528,7 +530,7 @@ function StreamingRecorder:startRecording(config, onChunk, onError)
   self._onChunk = onChunk
   self._onError = onError
 
-  print("[StreamingRecorder] startRecording called with lang=" .. lang)
+  logger.i("startRecording called with lang=" .. lang)
 
   -- Ensure server is running
   local started, err = self:_ensureServerRunning(config.outputDir or self.tempDir, lang)
@@ -551,7 +553,7 @@ function StreamingRecorder:startRecording(config, onChunk, onError)
   -- Set recording flag after successful start
   self._isRecording = true
 
-  print("[StreamingRecorder] ✓ Recording started")
+  logger.i("✓ Recording started")
   return true, nil
 end
 
@@ -585,13 +587,13 @@ function StreamingRecorder:stopRecording(onComplete, onError)
   -- 3. Timeout expires (fallback)
   self._onComplete = onComplete
 
-  print("[StreamingRecorder] ✓ Stop command sent")
+  logger.i("✓ Stop command sent")
 
   -- Set timeout fallback in case server events never arrive
   -- This prevents hanging if server crashes or connection is lost
   if hs and hs.timer then
     self._completionTimer = hs.timer.doAfter(10, function()
-      print("[StreamingRecorder] ⚠️ Completion timeout - server events did not arrive")
+      logger.w("⚠️ Completion timeout - server events did not arrive")
       self:_triggerCompletion()
     end)
   end
@@ -623,7 +625,7 @@ end
 ---
 --- @return boolean True if cleanup successful
 function StreamingRecorder:cleanup()
-  print("[StreamingRecorder] Cleaning up...")
+  logger.i("Cleaning up...")
 
   -- Send shutdown command to server
   if self.tcpSocket then
@@ -658,7 +660,7 @@ function StreamingRecorder:cleanup()
   self._onError = nil
   self._onComplete = nil
 
-  print("[StreamingRecorder] ✓ Cleanup complete")
+  logger.i("✓ Cleanup complete")
   return true
 end
 

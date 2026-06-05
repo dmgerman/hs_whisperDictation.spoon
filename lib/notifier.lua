@@ -78,7 +78,7 @@ function Notifier.show(category, severity, message)
 
   -- Log all messages (even debug)
   if hs and hs.logger then
-    local logger = hs.logger.new("WhisperDictation", "info")
+    local logger = hs.logger.new("WhisperDictation", "warning")
     logger.f("[%s:%s] %s", category, severity, message)
   else
     print(string.format("[%s:%s] %s", category, severity, message))

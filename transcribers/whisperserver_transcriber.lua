@@ -12,6 +12,8 @@ local ITranscriber = dofile(spoonPath .. "i_transcriber.lua")
 local WhisperServerTranscriber = setmetatable({}, {__index = ITranscriber})
 WhisperServerTranscriber.__index = WhisperServerTranscriber
 
+local logger = hs.logger.new("WhisperServer", "warning")
+
 --- Create a new WhisperServerTranscriber instance
 ---
 --- @param config table Configuration options:
@@ -76,9 +78,9 @@ function WhisperServerTranscriber:_startServer()
     return false, "Model file not found: " .. self.modelPath
   end
 
-  print("[WhisperServerTranscriber] Starting server: " .. self.executable)
-  print("[WhisperServerTranscriber] Model: " .. self.modelPath)
-  print("[WhisperServerTranscriber] Port: " .. self.port)
+  logger.i("Starting server: " .. self.executable)
+  logger.i("Model: " .. self.modelPath)
+  logger.i("Port: " .. self.port)
 
   -- Start server using hs.task (async, non-blocking)
   self.serverTask = hs.task.new(
@@ -87,10 +89,10 @@ function WhisperServerTranscriber:_startServer()
     function(task, stdout, stderr)
       -- Stream callback for server output
       if stdout and stdout ~= "" then
-        print("[WhisperServer] " .. stdout)
+        logger.i(stdout)
       end
       if stderr and stderr ~= "" then
-        print("[WhisperServer] " .. stderr)
+        logger.i(stderr)
       end
       return true  -- Continue streaming
     end,
@@ -117,7 +119,7 @@ function WhisperServerTranscriber:_startServer()
     hs.timer.usleep(checkInterval * 1000000)  -- Convert to microseconds
 
     if self:_isServerRunning() then
-      print("[WhisperServerTranscriber] ✓ Server ready after " .. waited .. "s")
+      logger.i("✓ Server ready after " .. waited .. "s")
       return true, nil
     end
 
@@ -156,13 +158,13 @@ function WhisperServerTranscriber:validate()
 
   -- Check if server is running
   if self:_isServerRunning() then
-    print("[WhisperServerTranscriber] ✓ Server already running")
+    logger.i("✓ Server already running")
     return true, nil
   end
 
   -- Server not running - try to auto-start if configured
   if self.executable then
-    print("[WhisperServerTranscriber] Server not running, attempting auto-start...")
+    logger.i("Server not running, attempting auto-start...")
     local ok, err = self:_startServer()
     if not ok then
       return false, "Server auto-start failed: " .. tostring(err)
@@ -300,7 +302,7 @@ end
 --- Should be called when spoon is stopped/unloaded.
 function WhisperServerTranscriber:cleanup()
   if self.serverTask and self.serverStartedByUs then
-    print("[WhisperServerTranscriber] Stopping server (pid: " .. tostring(self.serverTask:pid()) .. ")")
+    logger.i("Stopping server (pid: " .. tostring(self.serverTask:pid()) .. ")")
     self.serverTask:terminate()
     self.serverTask = nil
     self.serverStartedByUs = false
