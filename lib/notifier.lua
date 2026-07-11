@@ -2,7 +2,13 @@
 --- This is the ONLY module that should call hs.alert.show()
 --- All UI feedback must go through this module to maintain the UI boundary pattern
 
+local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
+local Loggers = dofile(spoonPath .. "loggers.lua")
+
+local logger = Loggers.new("WhisperDictation")
+
 local Notifier = {}
+Notifier._logger = logger  -- exposed for testing; not part of the public API
 
 -- Valid categories and severities
 local VALID_CATEGORIES = {
@@ -76,12 +82,21 @@ function Notifier.show(category, severity, message)
   -- Format full message
   local fullMessage = string.format("%s %s", icon, message)
 
-  -- Log all messages (even debug)
-  if hs and hs.logger then
-    local logger = hs.logger.new("WhisperDictation", "warning")
-    logger.f("[%s:%s] %s", category, severity, message)
+  -- Log at the level that matches the notifier severity so the runtime log
+  -- level (see lib/loggers.lua + wd:setDebug) actually filters correctly.
+  -- Previously everything went through logger.f (info-equivalent), which
+  -- meant an "error" alert never reached the console at warning level.
+  local formatted = string.format("[%s:%s] %s", category, severity, message)
+  local sink = logger and ({
+    debug = logger.d,
+    info = logger.i,
+    warning = logger.w,
+    error = logger.e,
+  })[severity]
+  if sink then
+    sink(formatted)
   else
-    print(string.format("[%s:%s] %s", category, severity, message))
+    print(formatted)
   end
 
   -- Show alert for non-debug severities

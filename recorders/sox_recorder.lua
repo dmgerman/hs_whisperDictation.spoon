@@ -8,9 +8,12 @@
 -- Get the spoon directory path from this file's location
 local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
 local IRecorder = dofile(spoonPath .. "i_recorder.lua")
+local Loggers = dofile(spoonPath .. "../lib/loggers.lua")
 
 local SoxRecorder = setmetatable({}, {__index = IRecorder})
 SoxRecorder.__index = SoxRecorder
+
+local logger = Loggers.new("SoxRecorder")
 
 --- Create a new SoxRecorder instance
 ---

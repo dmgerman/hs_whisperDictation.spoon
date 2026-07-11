@@ -8,9 +8,12 @@
 -- Get the spoon directory path from this file's location
 local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
 local ITranscriber = dofile(spoonPath .. "i_transcriber.lua")
+local Loggers = dofile(spoonPath .. "../lib/loggers.lua")
 
 local WhisperKitTranscriber = setmetatable({}, {__index = ITranscriber})
 WhisperKitTranscriber.__index = WhisperKitTranscriber
+
+local logger = Loggers.new("WhisperKit")
 
 --- Create a new WhisperKitTranscriber instance
 ---

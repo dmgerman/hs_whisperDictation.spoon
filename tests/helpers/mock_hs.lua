@@ -24,6 +24,10 @@ function MockHS._resetAll()
     MockHS.task._creationCallback = nil
     MockHS.task._exitCallback = nil
   end
+  if MockHS.audiodevice then
+    MockHS.audiodevice.watcher._callback = nil
+    MockHS.audiodevice.watcher._running = false
+  end
 end
 
 --- hs.alert - Alert notifications
@@ -488,6 +492,40 @@ MockHS.hotkey = {
       delete = function() return {} end,
     }
   end,
+}
+
+--- hs.audiodevice - Audio device control
+MockHS.audiodevice = {
+  watcher = {
+    _callback = nil,
+    _running = false,
+
+    setCallback = function(fn)
+      MockHS.audiodevice.watcher._callback = fn
+      return MockHS.audiodevice.watcher
+    end,
+
+    start = function()
+      MockHS.audiodevice.watcher._running = true
+      return MockHS.audiodevice.watcher
+    end,
+
+    stop = function()
+      MockHS.audiodevice.watcher._running = false
+      return MockHS.audiodevice.watcher
+    end,
+
+    -- Test helper: deliver an event to the registered callback
+    _trigger = function(event)
+      if MockHS.audiodevice.watcher._running and MockHS.audiodevice.watcher._callback then
+        MockHS.audiodevice.watcher._callback(event)
+      end
+    end,
+
+    _isRunning = function()
+      return MockHS.audiodevice.watcher._running
+    end,
+  },
 }
 
 --- hs.eventtap - Event tapping

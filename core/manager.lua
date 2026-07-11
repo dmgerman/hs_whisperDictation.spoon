@@ -8,6 +8,9 @@
 -- Get the spoon directory path from this file's location
 local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
 local Notifier = dofile(spoonPath .. "../lib/notifier.lua")
+local Loggers = dofile(spoonPath .. "../lib/loggers.lua")
+
+local logger = Loggers.new("WhisperManager")
 
 local Manager = {}
 Manager.__index = Manager
@@ -19,6 +22,15 @@ Manager.STATES = {
   TRANSCRIBING = "TRANSCRIBING",
   ERROR = "ERROR",
 }
+
+-- If the first chunk's peak amplitude (float in [0, 1]) is below this,
+-- the microphone is delivering silence and we abort the session instead
+-- of wasting a transcriber round-trip and returning empty text. Working
+-- mics in a quiet room floor around 0.005; a muted / off / permission-
+-- denied device delivers ~0. 0.001 catches "no audio at all" without
+-- flagging a genuinely quiet speaker. Only checked on chunk 1 — later
+-- chunks may legitimately contain silence between phrases.
+Manager.FIRST_CHUNK_SILENCE_PEAK = 0.001
 
 -- Valid state transitions
 local VALID_TRANSITIONS = {
@@ -161,10 +173,12 @@ function Manager:startRecording(lang)
   }
 
   -- Start recorder with callbacks
+  -- peak is optional (only StreamingRecorder emits it). nil is treated as
+  -- "unknown" by _onChunkReceived and the first-chunk gate is skipped.
   local success, recorderErr = self.recorder:startRecording(
     recordingConfig,
-    function(audioFile, chunkNum, isFinal)
-      self:_onChunkReceived(audioFile, chunkNum, isFinal)
+    function(audioFile, chunkNum, isFinal, peak)
+      self:_onChunkReceived(audioFile, chunkNum, isFinal, peak)
     end,
     function(errorMsg)
       self:_onRecordingError(errorMsg)
@@ -288,19 +302,79 @@ function Manager:_onRecordingComplete()
   self:_checkIfComplete()
 end
 
+--- Describe the audio input device currently in use.
+---
+--- Prefers the recorder's explicit device config, then the system default.
+--- Returns "unknown" if neither is resolvable — the abort message is still
+--- useful without a device name, so this must never throw.
+---
+--- @return string Human-readable device description
+function Manager:_describeAudioInput()
+  if self.recorder and self.recorder.audioInputDevice then
+    return self.recorder.audioInputDevice
+  end
+  if hs and hs.audiodevice and hs.audiodevice.defaultInputDevice then
+    local ok, dev = pcall(hs.audiodevice.defaultInputDevice)
+    if ok and dev and dev.name then
+      return dev:name() .. " (system default)"
+    end
+  end
+  return "unknown"
+end
+
+--- Build the alert message for a silent first chunk.
+---
+--- The two cases are distinguished by whether the peak is bit-exact zero
+--- or merely near-zero. On macOS a process without microphone permission
+--- gets samples silently replaced with 0.0 (no error, no warning); a
+--- muted or disconnected device that IS producing samples still yields a
+--- tiny noise floor. This is a heuristic — the wording says so explicitly.
+---
+--- @param peak number Peak amplitude of the first chunk in [0, 1]
+--- @return string Multi-line alert / console message
+function Manager:_buildSilentChunkMessage(peak)
+  local device = self:_describeAudioInput()
+  local reason
+  if peak == 0 then
+    reason = "Likely cause: macOS microphone permission denied for the recording " ..
+      "process, or the input device is disconnected. Check System Settings → " ..
+      "Privacy & Security → Microphone."
+  else
+    reason = "Likely cause: microphone muted, gain at zero, or device powered off. " ..
+      "The device is producing samples but no signal."
+  end
+  return string.format(
+    "No audio in first chunk (peak=%.5f, device=\"%s\"). %s",
+    peak, device, reason
+  )
+end
+
 --- Callback invoked when a chunk is received from recorder
 ---
 --- @param audioFile string Path to audio file
 --- @param chunkNum number Chunk number (1-indexed)
 --- @param isFinal boolean True if this is the last chunk
-function Manager:_onChunkReceived(audioFile, chunkNum, isFinal)
+--- @param peak number|nil Peak amplitude in [0, 1] if the recorder reports it
+function Manager:_onChunkReceived(audioFile, chunkNum, isFinal, peak)
   -- Ignore chunks after abort (state reset to IDLE)
   if self.state == Manager.STATES.IDLE then return end
 
   Notifier.show("transcription", "debug", string.format(
-    "Chunk received: #%d (final: %s, file: %s)",
-    chunkNum, tostring(isFinal), audioFile
+    "Chunk received: #%d (final: %s, peak: %s, file: %s)",
+    chunkNum, tostring(isFinal), tostring(peak), audioFile
   ))
+
+  -- First-chunk silence gate: if the recorder can tell us the amplitude
+  -- and the very first chunk is essentially silent, abort now rather than
+  -- transcribing empty audio and letting the user keep talking into a
+  -- muted / off / permission-denied microphone. Later chunks are not
+  -- gated because a legitimate silence between phrases is fine.
+  if chunkNum == 1 and peak ~= nil and peak < Manager.FIRST_CHUNK_SILENCE_PEAK then
+    local msg = self:_buildSilentChunkMessage(peak)
+    Notifier.show("recording", "error", msg)  -- alert + logs at error level
+    self:abort()
+    return
+  end
 
   -- Increment pending counter
   self.pendingTranscriptions = self.pendingTranscriptions + 1

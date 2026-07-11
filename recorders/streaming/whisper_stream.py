@@ -316,7 +316,8 @@ class ContinuousRecorder:
                  sample_rate=16000,
                  audio_source=None,
                  audio_input_device=None,
-                 perfect_silence_duration=0.0):
+                 perfect_silence_duration=0.0,
+                 verbose=False):
         self.tcp_server = tcp_server
         self.output_dir = Path(output_dir)
         self.filename_prefix = filename_prefix
@@ -327,6 +328,11 @@ class ContinuousRecorder:
         self.audio_source = audio_source  # Optional FileAudioSource for testing
         self.audio_input_device = audio_input_device  # Optional audio input device name
         self.perfect_silence_duration = perfect_silence_duration  # Duration to detect mic off (0 to disable)
+        self.verbose = verbose  # Emit periodic RMS to stderr for diagnostics
+
+        # Diagnostic: last time we logged an RMS sample (seconds since epoch)
+        self._last_rms_log_time = 0.0
+        self._rms_log_interval = 1.0  # seconds between RMS log lines
 
         # Chunk state
         self.chunk_num = 0
@@ -393,9 +399,15 @@ class ContinuousRecorder:
             return True  # Assume speech to avoid losing audio
 
     def _save_chunk(self):
-        """Save current chunk audio to WAV file."""
+        """Save current chunk audio to WAV file.
+
+        Returns (path, peak) where peak is the max absolute amplitude on the
+        float32 buffer in [0, 1]. Peak is used downstream to reject the
+        recording early when the microphone is delivering silence — see the
+        first-chunk gate in core/manager.lua.
+        """
         if not self.current_chunk_audio:
-            return None
+            return None, 0.0
 
         self.chunk_num += 1
         chunk_file = self.output_dir / f"{self.filename_prefix}_chunk_{self.chunk_num:03d}.wav"
@@ -404,6 +416,9 @@ class ContinuousRecorder:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         audio_data = np.concatenate(self.current_chunk_audio)
+        # Compute peak on the float32 buffer BEFORE int16 conversion so the
+        # value stays in a stable [0, 1] range independent of dtype.
+        peak = float(np.max(np.abs(audio_data))) if audio_data.size > 0 else 0.0
         audio_data = convert_to_int16(audio_data)
 
         import scipy.io.wavfile
@@ -413,7 +428,7 @@ class ContinuousRecorder:
         self.current_chunk_audio = []
         self.current_chunk_start_time = time.time()
 
-        return str(chunk_file)
+        return str(chunk_file), peak
 
     def _check_perfect_silence(self, audio_chunk):
         """Check for perfect silence at startup only - verify mic is working."""
@@ -446,13 +461,14 @@ class ContinuousRecorder:
             self.running = False  # Stop server loop
             self.startup_silence_check_done = True  # Don't check again
 
-    def _emit_chunk_ready(self, chunk_file, is_final=False):
+    def _emit_chunk_ready(self, chunk_file, is_final=False, peak=0.0):
         """Emit chunk_ready event."""
         if chunk_file:
             if not self.tcp_server.send_event("chunk_ready",
                                              chunk_num=self.chunk_num,
                                              audio_file=chunk_file,
-                                             is_final=is_final):
+                                             is_final=is_final,
+                                             peak=peak):
                 # Client disconnected, stop recording
                 self.running = False
 
@@ -460,8 +476,8 @@ class ContinuousRecorder:
         """Check if chunk exceeded max duration and save if needed."""
         chunk_duration = time.time() - self.current_chunk_start_time
         if chunk_duration >= self.max_chunk_duration:
-            chunk_file = self._save_chunk()
-            self._emit_chunk_ready(chunk_file, is_final=False)
+            chunk_file, peak = self._save_chunk()
+            self._emit_chunk_ready(chunk_file, is_final=False, peak=peak)
             return True
         return False
 
@@ -485,8 +501,8 @@ class ContinuousRecorder:
         silence_duration = time.time() - self.silence_start_time
         if silence_duration >= self.silence_threshold:
             if chunk_duration >= self.min_chunk_duration:
-                chunk_file = self._save_chunk()
-                self._emit_chunk_ready(chunk_file, is_final=False)
+                chunk_file, peak = self._save_chunk()
+                self._emit_chunk_ready(chunk_file, is_final=False, peak=peak)
                 self.silence_start_time = None
                 self.consecutive_silence_count = 0
                 return True
@@ -513,6 +529,23 @@ class ContinuousRecorder:
         """Callback for sounddevice audio stream."""
         if status:
             self.tcp_server.send_event("error", error=f"Audio callback status: {status}")
+
+        # Diagnostic: emit periodic RMS/peak so we can tell whether the mic is
+        # producing samples at all, even before recording is armed. Rate-limited
+        # to ~1 line/sec so the console stays readable.
+        if self.verbose:
+            now = time.time()
+            if now - self._last_rms_log_time >= self._rms_log_interval:
+                self._last_rms_log_time = now
+                mono = indata[:, 0]
+                # RMS on the raw float32 samples (already in [-1, 1] range)
+                rms = float(np.sqrt(np.mean(mono.astype(np.float64) ** 2)))
+                peak = float(np.max(np.abs(mono)))
+                print(
+                    f"[whisper_stream] audio rms={rms:.5f} peak={peak:.5f} "
+                    f"frames={frames} recording={self.recording}",
+                    file=sys.stderr, flush=True,
+                )
 
         # Only process audio if actively recording
         if not self.recording:
@@ -736,8 +769,8 @@ class ContinuousRecorder:
             return
 
         if self.current_chunk_audio:
-            chunk_file = self._save_chunk()
-            self._emit_chunk_ready(chunk_file, is_final=True)
+            chunk_file, peak = self._save_chunk()
+            self._emit_chunk_ready(chunk_file, is_final=True, peak=peak)
 
         self.tcp_server.send_event("recording_stopped")
 
@@ -764,6 +797,8 @@ def main():
     parser.add_argument("--audio-input", help="Audio input device name (e.g., 'BlackHole 2ch')")
     parser.add_argument("--perfect-silence-duration", type=float, default=0.0,
                        help="Duration of perfect silence to detect mic off (seconds, 0 = disabled, 2.0 for testing)")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Emit periodic RMS/peak audio levels to stderr for diagnostics")
 
     args = parser.parse_args()
 
@@ -818,7 +853,8 @@ def main():
             args.max_chunk_duration,
             audio_source=audio_source,
             audio_input_device=args.audio_input,
-            perfect_silence_duration=args.perfect_silence_duration
+            perfect_silence_duration=args.perfect_silence_duration,
+            verbose=args.verbose,
         )
         recorder.start()
     except Exception as e:

@@ -8,11 +8,12 @@
 -- Get the spoon directory path from this file's location
 local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)")
 local ITranscriber = dofile(spoonPath .. "i_transcriber.lua")
+local Loggers = dofile(spoonPath .. "../lib/loggers.lua")
 
 local WhisperServerTranscriber = setmetatable({}, {__index = ITranscriber})
 WhisperServerTranscriber.__index = WhisperServerTranscriber
 
-local logger = hs.logger.new("WhisperServer", "warning")
+local logger = Loggers.new("WhisperServer")
 
 --- Create a new WhisperServerTranscriber instance
 ---
@@ -198,6 +199,9 @@ function WhisperServerTranscriber:transcribe(audioFile, lang, onSuccess, onError
     return false, "Audio file not found: " .. audioFile
   end
 
+  logger.i(string.format("POST %s bytes=%d lang=%s",
+    audioFile, fileAttrs.size or 0, tostring(lang)))
+
   -- Build server URL
   local serverUrl = string.format(
     "http://%s:%s/inference",
@@ -228,6 +232,11 @@ function WhisperServerTranscriber:transcribe(audioFile, lang, onSuccess, onError
 
     local output = handle:read("*a")
     local success, exitType, exitCode = handle:close()
+
+    local outLen = output and #output or 0
+    local preview = output and output:sub(1, 200):gsub("\n", "\\n") or ""
+    logger.i(string.format("curl close=%s type=%s code=%s outLen=%d preview=%q",
+      tostring(success), tostring(exitType), tostring(exitCode), outLen, preview))
 
     if not success then
       if onError then

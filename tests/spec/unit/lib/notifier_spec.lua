@@ -23,11 +23,16 @@ describe("Notifier", function()
 
     mock_hs.alert.show = alertSpy
 
-    -- Create a mock logger
-    local mockLogger = {
-      f = logSpy
-    }
-    mock_hs.logger.new = function() return mockLogger end
+    -- The Notifier module captures its logger at load time via the shared
+    -- Loggers registry, so we spy on the exposed instance rather than
+    -- replacing hs.logger.new (which no longer runs at Notifier.show time).
+    -- Route every severity method to the same spy so any of debug/info/
+    -- warning/error triggers "was_called".
+    Notifier._logger.d = logSpy
+    Notifier._logger.i = logSpy
+    Notifier._logger.w = logSpy
+    Notifier._logger.e = logSpy
+    Notifier._logger.f = logSpy
   end)
 
   describe("Category validation", function()

@@ -251,6 +251,12 @@ obj.activityCounts = {keys = 0, clicks = 0, appSwitches = 0}
 obj.startingApp = nil
 obj.shouldPaste = false
 
+-- Audio device watcher state (only used when recorder == "streaming")
+obj.audioDeviceWatcherActive = false
+obj.audioDeviceRestartTimer = nil  -- debounce timer
+obj.audioDeviceRestartPending = false  -- deferred restart flag (set when device changes mid-recording)
+obj.audioDeviceRestartDebounceSec = 0.75
+
 -- Callback state
 obj.transcriptionCallback = nil
 
@@ -313,6 +319,52 @@ local function updateElapsed()
     end
     updateMenu(title, "Recording...")
   end
+end
+
+-- Restart the streaming recorder server so it rebinds to the current system
+-- default input device. PortAudio resolves the device once at sd.InputStream
+-- open time, so any later mic change leaves the stream bound to the old device.
+-- Also used by wd:restartServer() when the user wants to pick up config changes
+-- (such as debug verbose logging) without a full spoon reload.
+local function restartStreamingServer(reason)
+  if not obj.recorder or obj.recorder:getName() ~= "streaming" then
+    return false, "not using streaming recorder"
+  end
+
+  reason = reason or "user requested"
+  obj.logger:info("Restarting streaming server (" .. reason .. ")")
+  local Notifier = dofile(spoonPath .. "lib/notifier.lua")
+  Notifier.show("init", "info", "Restarting streaming server (" .. reason .. ")")
+
+  obj.recorder:cleanup()
+  local ok, err = obj.recorder:warmup()
+  if not ok then
+    obj.logger:error("Streaming server restart failed: " .. tostring(err), true)
+    Notifier.show("init", "error", "Streaming server restart failed: " .. tostring(err))
+    return false, err
+  end
+  obj.logger:info("✓ Streaming server restarted (" .. reason .. ")")
+  return true, nil
+end
+
+-- Schedule restartStreamingServer() with debounce; defer if a recording is
+-- in progress (handled by the IDLE branch of manager.onStateChanged).
+local function scheduleAudioDeviceRestart()
+  if obj.manager and obj.manager.state ~= "IDLE" then
+    obj.audioDeviceRestartPending = true
+    obj.logger:info("Audio input changed during " .. obj.manager.state .. " — deferring restart until IDLE")
+    return
+  end
+
+  if obj.audioDeviceRestartTimer then
+    obj.audioDeviceRestartTimer:stop()
+    obj.audioDeviceRestartTimer = nil
+  end
+
+  obj.audioDeviceRestartTimer = hs.timer.doAfter(obj.audioDeviceRestartDebounceSec, function()
+    obj.audioDeviceRestartTimer = nil
+    restartStreamingServer("audio input device changed")
+  end)
 end
 
 -- ============================================================================
@@ -1160,6 +1212,11 @@ function obj:start()
       stopRecordingSession()
       resetMenuToIdle()
 
+      if obj.audioDeviceRestartPending then
+        obj.audioDeviceRestartPending = false
+        scheduleAudioDeviceRestart()
+      end
+
       -- Handle auto-paste if enabled and we came from TRANSCRIBING (successful completion)
       if oldState == "TRANSCRIBING" and obj.shouldPaste then
         obj.logger:info("Auto-paste enabled, checking conditions...")
@@ -1225,6 +1282,19 @@ function obj:start()
 
   resetMenuToIdle()
 
+  -- Watch for system default input device changes. Streaming recorder holds a
+  -- long-lived PortAudio InputStream bound at startup; restart it on change.
+  if obj.config.recorder == "streaming" and not obj.audioDeviceWatcherActive then
+    hs.audiodevice.watcher.setCallback(function(event)
+      if event == "dIn " then
+        scheduleAudioDeviceRestart()
+      end
+    end)
+    hs.audiodevice.watcher.start()
+    obj.audioDeviceWatcherActive = true
+    obj.logger:debug("Audio device watcher started")
+  end
+
   local readyMsg = string.format("WhisperDictation ready: %s + %s",
     obj.recorder:getName(), obj.transcriber:getName())
   obj.logger:info(readyMsg, true)
@@ -1244,6 +1314,17 @@ function obj:stop()
   obj.hotkeys = {}
   stopRecordingSession()
 
+  if obj.audioDeviceRestartTimer then
+    obj.audioDeviceRestartTimer:stop()
+    obj.audioDeviceRestartTimer = nil
+  end
+  if obj.audioDeviceWatcherActive then
+    hs.audiodevice.watcher.stop()
+    hs.audiodevice.watcher.setCallback(nil)
+    obj.audioDeviceWatcherActive = false
+  end
+  obj.audioDeviceRestartPending = false
+
   -- Clean up new architecture components
   if obj.recorder and obj.recorder.cleanup then
     obj.recorder:cleanup()
@@ -1256,6 +1337,120 @@ function obj:stop()
   obj.transcriber = nil
 
   obj.logger:info("WhisperDictation stopped", true)
+end
+
+-- ============================================================================
+-- === Runtime Debug Controls ===
+-- ============================================================================
+
+--- Toggle verbose diagnostics across the entire pipeline at runtime.
+---
+--- Flips every hs.logger created via lib/loggers.lua between "info" and
+--- "warning", and sets obj.config.streaming.verbose so the next Python
+--- server start passes --verbose (audio-level RMS printed to stderr).
+---
+--- To pick up the Python side without stopping/restarting the spoon, call
+--- wd:restartServer() after enabling debug.
+---
+--- @param enable boolean true to enable, false to disable
+function obj:setDebug(enable)
+  local Loggers = dofile(spoonPath .. "lib/loggers.lua")
+  local level = enable and "info" or "warning"
+  Loggers.setLevel(level)
+
+  obj.config.streaming = obj.config.streaming or {}
+  obj.config.streaming.verbose = enable and true or nil
+
+  -- Push the flag into the live recorder instance so the next _startServer
+  -- picks it up on restartServer() without needing to recreate the recorder.
+  if obj.recorder and obj.recorder.setVerbose then
+    obj.recorder:setVerbose(enable)
+  end
+
+  obj.logger:info(string.format("Debug %s (logger level: %s)",
+    enable and "ENABLED" or "disabled", level), true)
+  return self
+end
+
+--- Restart the streaming recorder's Python server on demand.
+---
+--- Used to pick up config changes (e.g. after wd:setDebug(true)) or to
+--- recover from a wedged server. No-op when the sox recorder is active.
+---
+--- @return boolean success
+--- @return string|nil error
+function obj:restartServer()
+  return restartStreamingServer("user requested")
+end
+
+--- Print a one-shot health snapshot to the Hammerspoon console.
+---
+--- Reports the active recorder/transcriber, Manager state, pending
+--- transcriptions, audio input device, and any live server pids/ports.
+--- Meant to be called from the console when something isn't working.
+function obj:diagnose()
+  local function w(fmt, ...)
+    print(string.format("[WhisperDictation:diagnose] " .. fmt, ...))
+  end
+
+  w("--- WhisperDictation diagnostics ---")
+  w("Language: %s (index %d of %s)", tostring(currentLang()), obj.langIndex,
+    hs.inspect(obj.languages))
+  w("Config: recorder=%s transcriber=%s",
+    tostring(obj.config.recorder), tostring(obj.config.transcriber))
+
+  if obj.manager then
+    w("Manager: state=%s pending=%d recorderDone=%s",
+      tostring(obj.manager.state),
+      obj.manager.pendingTranscriptions or -1,
+      tostring(obj.manager._recorderDone))
+  else
+    w("Manager: nil (spoon not started)")
+  end
+
+  if obj.recorder then
+    w("Recorder: %s isRecording=%s",
+      obj.recorder:getName(), tostring(obj.recorder:isRecording()))
+    if obj.recorder.getName and obj.recorder:getName() == "streaming" then
+      local port = obj.recorder.tcpPort
+      local proc = obj.recorder.serverProcess
+      local pid = proc and proc.pid and proc:pid() or nil
+      local running = proc and proc.isRunning and proc:isRunning() or false
+      w("  streaming server: pid=%s running=%s port=%s",
+        tostring(pid), tostring(running), tostring(port))
+      w("  audio input device: %s",
+        tostring(obj.recorder.audioInputDevice or "(system default)"))
+      w("  verbose flag: %s", tostring(obj.config.streaming and obj.config.streaming.verbose))
+    end
+  else
+    w("Recorder: nil")
+  end
+
+  if obj.transcriber then
+    w("Transcriber: %s", obj.transcriber:getName())
+    if obj.transcriber.getName and obj.transcriber:getName() == "WhisperServer" then
+      local task = obj.transcriber.serverTask
+      local pid = task and task.pid and task:pid() or nil
+      w("  whisper-server: pid=%s host=%s port=%s executable=%s",
+        tostring(pid), tostring(obj.transcriber.host),
+        tostring(obj.transcriber.port), tostring(obj.transcriber.executable))
+      w("  model: %s", tostring(obj.transcriber.modelPath))
+    end
+  else
+    w("Transcriber: nil")
+  end
+
+  -- Current system default input device (independent of what the recorder bound)
+  local defaultInput = hs.audiodevice and hs.audiodevice.defaultInputDevice()
+  if defaultInput then
+    w("System default input: %s (uid=%s muted=%s)",
+      defaultInput:name(), defaultInput:uid(), tostring(defaultInput:muted()))
+  end
+
+  local Loggers = dofile(spoonPath .. "lib/loggers.lua")
+  w("Logger level: %s", Loggers.getLevel())
+  w("--- end diagnostics ---")
+  return self
 end
 
 -- ============================================================================

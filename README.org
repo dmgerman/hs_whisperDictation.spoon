@@ -525,13 +525,69 @@ brew install whisper-cli     # For WhisperCLI
 brew install sox             # For Sox recorder
 #+end_src
 
+** No Audio in First Chunk
+
+If the first recorded chunk has no audio, the spoon aborts recording rather
+than sending silence to the transcriber. You will see a red alert like:
+
+: No audio in first chunk (peak=0.00000, device="Wireless Microphone (system default)").
+: Likely cause: macOS microphone permission denied for the recording process,
+: or the input device is disconnected.
+
+The alert always names the current input device and gives a heuristic cause
+based on whether the audio is bit-exact zero (permission / disconnected) or
+merely near-zero (muted / gain 0 / powered off).
+
+*Recovery runbook* — try in order, least invasive first:
+
+1. *Physically unplug and re-plug the microphone.* On macOS 26 (Tahoe), USB
+   audio devices can get stuck in a state where they enumerate but deliver
+   silence to some clients (notably Python's =sounddevice= via PortAudio).
+   Physical replug clears the state.
+2. =sudo killall corespeechd= — restarts the speech-recognition daemon.
+   Fixes the case where =hs.speech.listener= goes deaf; see the [[https://forums.macrumors.com/threads/dictation-not-activating-in-tahoe-26-f5-tone-but-no-response-fix.2477454/][macOS 26 silent-mic bug]].
+3. =sudo killall coreaudiod= — heaviest hammer, resets system-wide audio.
+   All audio-using apps hiccup briefly. Use only if the first two don't help.
+
+** Runtime Debug Controls
+
+New in v2.x — toggle diagnostics without reloading the spoon.
+
+#+begin_src lua
+-- Turn on debug logging across all modules AND pass --verbose to the
+-- Python streaming server on the next start (RMS audio levels to stderr).
+spoon.hs_whisperDictation:setDebug(true)
+
+-- Pick up --verbose by restarting the streaming server on demand.
+-- Also useful for recovering from a wedged server.
+spoon.hs_whisperDictation:restartServer()
+
+-- One-shot health snapshot printed to the console: manager state, pending
+-- transcriptions, recorder/transcriber names, server pids and ports, and
+-- the current audio input device.
+spoon.hs_whisperDictation:diagnose()
+
+-- Return to quiet mode
+spoon.hs_whisperDictation:setDebug(false)
+#+end_src
+
+Typical debug session when something isn't working:
+
+#+begin_src lua
+spoon.hs_whisperDictation:setDebug(true)
+spoon.hs_whisperDictation:restartServer()
+spoon.hs_whisperDictation:diagnose()
+-- Trigger the normal toggle hotkey and watch the console:
+--   chunk file size + peak amplitude on each chunk_ready
+--   POST size + curl exit + response preview from the transcriber
+--   [whisper_stream] audio rms=... peak=... every ~1 s from Python
+spoon.hs_whisperDictation:setDebug(false)
+#+end_src
+
 ** Debugging in Hammerspoon Console
 
 #+begin_src lua
 -- Open console: Cmd+Opt+Ctrl+C
-
--- Check current status
-print(hs.inspect(wd:getStatus()))
 
 -- List recent recordings
 print(hs.execute("ls -lht /tmp/whisper_dict/*.wav | head -5"))

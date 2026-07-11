@@ -8,11 +8,12 @@
 -- Get the spoon directory path from this file's location
 local spoonPath = debug.getinfo(1, "S").source:match("@(.*/)"):gsub("recorders/streaming/", "")
 local IRecorder = dofile(spoonPath .. "recorders/i_recorder.lua")
+local Loggers = dofile(spoonPath .. "lib/loggers.lua")
 
 local StreamingRecorder = setmetatable({}, {__index = IRecorder})
 StreamingRecorder.__index = StreamingRecorder
 
-local logger = hs.logger.new("StreamingRecorder", "warning")
+local logger = Loggers.new("StreamingRecorder")
 
 --- Create a new StreamingRecorder instance
 ---
@@ -35,6 +36,7 @@ function StreamingRecorder.new(config)
   self.tcpPort = config.tcpPort or 12341
   self.tempDir = config.tempDir or "/tmp/whisper_dict"
   self.audioInputDevice = config.audioInputDevice  -- nil = default device
+  self.verbose = config.verbose and true or false  -- pass --verbose to Python
 
   -- VAD configuration
   self.silenceThreshold = config.silenceThreshold or 2.0
@@ -177,6 +179,11 @@ function StreamingRecorder:_startServer(outputDir, filenamePrefix)
   if self.audioInputDevice then
     table.insert(args, "--audio-input")
     table.insert(args, self.audioInputDevice)
+  end
+
+  -- Add --verbose so Python emits periodic RMS audio levels to stderr
+  if self.verbose then
+    table.insert(args, "--verbose")
   end
 
   local serverReady = false
@@ -368,11 +375,19 @@ function StreamingRecorder:_handleServerEvent(event, lang)
   elseif eventType == "chunk_ready" then
     self._chunkCount = self._chunkCount + 1
 
-    logger.i(string.format("Chunk %d ready: %s", event.chunk_num, event.audio_file))
+    -- Report chunk file size and peak amplitude so silent/empty chunks are
+    -- visible in the log. Peak is a float in [0, 1] emitted by Python
+    -- (from the pre-int16 buffer); 0 means bit-exact silence.
+    local sizeBytes = 0
+    local attrs = hs.fs.attributes(event.audio_file)
+    if attrs and attrs.size then sizeBytes = attrs.size end
+    local peak = event.peak or 0
+    logger.i(string.format("Chunk %d ready: %s (%d bytes, peak=%.5f, final=%s)",
+      event.chunk_num, event.audio_file, sizeBytes, peak, tostring(event.is_final)))
 
-    -- Emit chunk immediately via callback
+    -- Emit chunk immediately via callback (peak passed as 4th arg)
     if self._onChunk then
-      self._onChunk(event.audio_file, event.chunk_num, event.is_final)
+      self._onChunk(event.audio_file, event.chunk_num, event.is_final, peak)
     end
 
     -- If this is the final chunk AND recording has stopped, trigger completion
@@ -669,6 +684,16 @@ end
 --- @return boolean recording True if recording
 function StreamingRecorder:isRecording()
   return self._isRecording
+end
+
+--- Toggle Python --verbose flag for the next server start.
+---
+--- Does not affect a currently running server; call cleanup() + warmup()
+--- (or wd:restartServer()) to pick up the change.
+---
+--- @param enable boolean
+function StreamingRecorder:setVerbose(enable)
+  self.verbose = enable and true or false
 end
 
 --- Get recorder name
