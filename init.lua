@@ -1468,12 +1468,12 @@ function obj:bindHotKeys(mapping)
     abort        = function() obj:abort() end,
   }
   local descriptions = {
-    toggle       = "Toggle whisper transcription [Whisper]",
-    togglePaste  = "Toggle whisper transcription with auto-paste [Whisper]",
-    nextLang     = "Select whisper language for transcription [Whisper]",
-    retranscribe = "Retranscribe recent recording [Whisper]",
-    selectFilter = "Select transcription filter [Whisper]",
-    abort        = "Abort current recording/transcription [Whisper]",
+    toggle       = "toggle- Toggle whisper transcription [Whisper]",
+    togglePaste  = "toggle_paste - Toggle whisper transcription with auto-paste [Whisper]",
+    nextLang     = "next_lang - Select whisper language for transcription [Whisper]",
+    retranscribe = "retranscribe - Retranscribe recent recording [Whisper]",
+    selectFilter = "select_filter - Select transcription filter [Whisper]",
+    abort        = "abort - Abort current recording/transcription [Whisper]",
   }
 
   local map = hs.fnutils.copy(mapping or obj.defaultHotkeys)
@@ -1486,5 +1486,19 @@ function obj:bindHotKeys(mapping)
   end
   return self
 end
+
+obj.publicCommands = {
+  {fn = function() obj:restartServer()    end,  desc = "restartServer - restart server [Whisper]"},
+  {fn = function() obj:diagnose()    end,       desc = "diagnose - diagnose bugs in the transcription engine [Whisper]"},
+  {fn = function() obj:setDebug(true)    end,   desc = "enableDebug - enable debugging info [Whisper]"},
+  {fn = function() obj:setDebug(false)   end,   desc = "disableDebug - disable debugging info [Whisper]"},
+  {fn = function() obj:stop()            end,   desc = "stop - stop the transcription server [Whisper]"},
+  {fn = function()
+      obj:stop()
+      obj:start()
+  end,            desc = "restart - restart the transcription server [Whisper]"},
+}
+
+
 
 return obj
