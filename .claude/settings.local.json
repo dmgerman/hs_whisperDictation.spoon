@@ -93,7 +93,21 @@
       "Bash(/opt/homebrew/opt/lua@5.4/bin/lua5.4 -e 'package.path=\"\"/opt/homebrew/share/lua/5.4/?.lua;/opt/homebrew/share/lua/5.4/?/init.lua;\"\"..package.path' /tmp/debug_test2.lua)",
       "Bash(timeout 5 hs -c \"print\\(''ready''\\)\")",
       "Bash(./tests/test_filter_integration.sh 2>&1)",
-      "Bash(timeout 5 hs -c \"print\\(spoon.hs_whisperDictation.manager.state\\)\")"
+      "Bash(timeout 5 hs -c \"print\\(spoon.hs_whisperDictation.manager.state\\)\")",
+      "Read(//Users/dmg/.hammerspoon/**)",
+      "Bash(/Users/dmg/.config/dmg/python/bin/python3 *)",
+      "Read(//private/tmp/whisper_dict/**)",
+      "Bash(/opt/homebrew/bin/sox *)",
+      "Bash(log show *)",
+      "Bash(/usr/bin/log show *)",
+      "Bash(rm -f /tmp/speechd_stream.log)",
+      "Bash(/usr/bin/log stream *)",
+      "Bash(swift *)",
+      "Bash(rm -f /tmp/speechd_stream2.log)",
+      "Bash(rm -f /tmp/speechd_stream3.log)",
+      "Bash(rm -f /tmp/speechd_stream4.log)",
+      "Bash(rm -f /tmp/speechd_stream5.log)",
+      "Bash(rm -f /tmp/speechd_stream6.log)"
     ],
     "deny": [],
     "ask": []
