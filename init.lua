@@ -271,10 +271,6 @@ local function ensureDir(path)
   hs.fs.mkdir(path)
 end
 
-local function currentLang()
-  return obj.languages[obj.langIndex]
-end
-
 local function updateMenu(title, tip)
   if obj.menubar then
     obj.menubar:setTitle(title)
@@ -300,7 +296,7 @@ end
 
 local function resetMenuToIdle()
   local abbrev = activeFilterAbbrev()
-  local title = obj.icons.idle .. " (" .. currentLang() .. ")"
+  local title = obj.icons.idle .. " (" .. obj:getLanguage() .. ")"
   local tip = "Idle"
   if abbrev then
     title = title .. " [" .. abbrev .. "]"
@@ -313,7 +309,7 @@ local function updateElapsed()
   if obj.manager and obj.manager.state == "RECORDING" then
     local elapsed = obj.startTime and (os.time() - obj.startTime) or 0
     local abbrev = activeFilterAbbrev()
-    local title = string.format("%s %ds (%s)", obj.icons.recording, elapsed, currentLang())
+    local title = string.format("%s %ds (%s)", obj.icons.recording, elapsed, obj:getLanguage())
     if abbrev then
       title = title .. " [" .. abbrev .. "]"
     end
@@ -738,8 +734,7 @@ local function retranscribe(audioFile, callback)
     transcriberName = transcriber:getName()
   end
 
-  -- Get current language
-  local lang = currentLang()
+  local lang = obj:getLanguage()
 
   -- Show alert and update menubar
   Notifier.show("transcription", "info", "Re-transcribing with " .. transcriberName .. " (" .. lang .. ")...")
@@ -850,15 +845,53 @@ local function stopRecordingSession()
 end
 
 -- ============================================================================
--- === Language Chooser ===
+-- === Language API ===
 -- ============================================================================
 
-local function showLanguageChooser()
+--- WhisperDictation:getLanguage()
+--- Method
+--- Returns the currently selected transcription language.
+---
+--- Returns:
+---  * String language code (e.g. "en")
+function obj:getLanguage()
+  return self.languages[self.langIndex]
+end
+
+--- WhisperDictation:setLanguage(lang)
+--- Method
+--- Sets the active transcription language. The language must be present in
+--- `obj.languages`.
+---
+--- Parameters:
+---  * lang - String language code to select
+---
+--- Returns:
+---  * true on success, or false and an error message if the language is unknown
+function obj:setLanguage(lang)
+  for i, l in ipairs(self.languages) do
+    if l == lang then
+      self.langIndex = i
+      self.logger:info(self.icons.language .. " Language switched to: " .. lang, true)
+      resetMenuToIdle()
+      return true
+    end
+  end
+  local err = "Unknown language: " .. tostring(lang)
+  self.logger:warn(err, true)
+  return false, err
+end
+
+--- WhisperDictation:selectLanguage()
+--- Method
+--- Opens an interactive chooser to pick the active transcription language
+--- from `obj.languages`.
+function obj:selectLanguage()
   local choices = {}
-  for i, lang in ipairs(obj.languages) do
+  for i, lang in ipairs(self.languages) do
     table.insert(choices, {
       text = lang,
-      subText = (i == obj.langIndex and "✓ Selected" or ""),
+      subText = (i == self.langIndex and "✓ Selected" or ""),
       lang = lang,
       index = i,
     })
@@ -866,9 +899,7 @@ local function showLanguageChooser()
 
   local chooser = hs.chooser.new(function(choice)
     if choice then
-      obj.langIndex = choice.index
-      obj.logger:info(obj.icons.language .. " Language switched to: " .. choice.lang, true)
-      resetMenuToIdle()
+      self:setLanguage(choice.lang)
     end
   end)
 
@@ -907,11 +938,11 @@ function obj:beginTranscribe(callbackOrPaste)
   ensureDir(self.tempDir)
 
   -- Start recording via Manager (callback-based, no promises)
-  local ok, err = self.manager:startRecording(currentLang())
+  local ok, err = self.manager:startRecording(obj:getLanguage())
 
   if ok then
     local abbrev = activeFilterAbbrev()
-    local msg = self.icons.recording .. " Recording started (" .. currentLang() .. ")"
+    local msg = self.icons.recording .. " Recording started (" .. obj:getLanguage() .. ")"
     if abbrev then
       msg = msg .. " [" .. abbrev .. "]"
     end
@@ -1184,7 +1215,7 @@ function obj:start()
 
   -- Create Manager
   obj.manager = Manager.new(obj.recorder, obj.transcriber, {
-    language = currentLang(),
+    language = obj:getLanguage(),
     tempDir = obj.tempDir,
   })
 
@@ -1206,7 +1237,7 @@ function obj:start()
       if obj.timeoutTimer then obj.timeoutTimer:stop(); obj.timeoutTimer = nil; end
       obj.startTime = nil
       hideRecordingIndicator()
-      updateMenu(obj.icons.transcribing .. " (" .. currentLang() .. ")", "Transcribing...")
+      updateMenu(obj.icons.transcribing .. " (" .. obj:getLanguage() .. ")", "Transcribing...")
     elseif newState == "IDLE" then
       -- Entering idle state - reset everything
       stopRecordingSession()
@@ -1462,7 +1493,7 @@ function obj:bindHotKeys(mapping)
   local def = {
     toggle       = function() obj:toggleTranscribe() end,
     togglePaste  = function() obj:toggleTranscribe(true) end,
-    nextLang     = showLanguageChooser,
+    nextLang     = function() obj:selectLanguage() end,
     retranscribe = function() obj:transcribeLatestAgain() end,
     selectFilter = showFilterChooser,
     abort        = function() obj:abort() end,

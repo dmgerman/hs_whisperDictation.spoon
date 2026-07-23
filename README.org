@@ -137,6 +137,14 @@ wd:bindHotKeys({
 
 Press the =nextLang= hotkey to open a chooser and switch languages.
 
+You can also drive language selection from code:
+
+#+begin_src lua
+wd:getLanguage()       -- returns current language code, e.g. "en"
+wd:setLanguage("ja")   -- set directly; returns false, err if unknown
+wd:selectLanguage()    -- open the interactive chooser
+#+end_src
+
 ** Retranscription
 
 Re-transcribe a previous recording with a different transcriber or language.
