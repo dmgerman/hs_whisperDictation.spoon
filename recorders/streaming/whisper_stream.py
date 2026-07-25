@@ -186,6 +186,11 @@ def check_dependencies():
             import torchaudio
         except ImportError:
             missing.append("torchaudio (install: pip install torchaudio)")
+        except Exception as e:
+            # A torchaudio built against a mismatched torch version fails at
+            # import with e.g. TypeError (metaclass conflict). Treat it as a
+            # broken install and report it, rather than crashing the checker.
+            missing.append(f"torchaudio (broken install: {type(e).__name__}: {e} — try: pip install --force-reinstall torchaudio)")
 
     try:
         import scipy.io.wavfile

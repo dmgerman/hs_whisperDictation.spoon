@@ -114,28 +114,31 @@ class TestContinuousRecorder:
         assert not recorder.mic_off
 
     def test_save_chunk_creates_file(self, recorder, temp_dir):
-        """Should save audio chunk to WAV file."""
+        """Should save audio chunk to WAV file and return (path, peak)."""
         # Add audio data
         recorder.current_chunk_audio = [
             np.random.randn(8000).astype(np.float32)
         ]
 
         with patch('scipy.io.wavfile.write') as mock_write:
-            chunk_file = recorder._save_chunk()
+            chunk_file, peak = recorder._save_chunk()
 
         assert chunk_file is not None
         assert "test_chunk_001.wav" in chunk_file
+        assert isinstance(peak, float)
+        assert peak >= 0.0
         assert recorder.chunk_num == 1
         assert recorder.current_chunk_audio == []  # Should be reset
         mock_write.assert_called_once()
 
     def test_save_chunk_empty_audio(self, recorder):
-        """Should handle empty audio gracefully."""
+        """Should handle empty audio gracefully — (None, 0.0)."""
         recorder.current_chunk_audio = []
 
-        chunk_file = recorder._save_chunk()
+        chunk_file, peak = recorder._save_chunk()
 
         assert chunk_file is None
+        assert peak == 0.0
         assert recorder.chunk_num == 0  # Should not increment
 
     def test_save_chunk_increments_counter(self, recorder):
@@ -203,14 +206,15 @@ class TestContinuousRecorder:
         assert recorder.chunk_num == 0  # No save
 
     def test_emit_chunk_ready(self, recorder, mock_tcp_server):
-        """Should emit chunk_ready event."""
-        recorder._emit_chunk_ready("/path/to/chunk.wav", is_final=False)
+        """Should emit chunk_ready event including the peak amplitude."""
+        recorder._emit_chunk_ready("/path/to/chunk.wav", is_final=False, peak=0.42)
 
         mock_tcp_server.send_event.assert_called_with(
             "chunk_ready",
             chunk_num=0,
             audio_file="/path/to/chunk.wav",
-            is_final=False
+            is_final=False,
+            peak=0.42
         )
 
     def test_emit_chunk_ready_client_disconnect(self, recorder, mock_tcp_server):

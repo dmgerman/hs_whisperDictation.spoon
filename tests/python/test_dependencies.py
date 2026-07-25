@@ -79,8 +79,12 @@ class TestCheckDependencies:
 
     def test_torch_present_onnx_missing(self):
         """Should not report missing when torch is present."""
-        # Mock torch as present
+        # Mock torch as present. Also mock torchaudio so the checker's
+        # follow-up "if has_torch: import torchaudio" does not attempt a real
+        # import — the real one may be broken in the test environment and
+        # is not what this test is asserting on.
         sys.modules['torch'] = MagicMock()
+        sys.modules['torchaudio'] = MagicMock()
         sys.modules['onnxruntime'] = None
 
         import whisper_stream
