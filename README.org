@@ -191,7 +191,7 @@ end)
 
 * Post-Transcription Filters
 
-Pipe your transcription through any shell command before it goes to clipboard. Filters read from stdin and write to stdout.
+Pass your transcription through a shell command or a Lua function before it goes to the clipboard. Shell filters read from stdin and write to stdout; Lua filters take the text as an argument and return the transformed string.
 
 ** Basic Usage
 
@@ -224,15 +224,19 @@ When a filter with an =abbrev= is active, the abbreviation is shown in the menub
 wd.whisperFilters = {
   { name = "Display Name", abbrev = "DN", cmd = "shell-command-here" },
   { name = "Another Filter", cmd = "other-command" },
+  { name = "Trim Trailing Space", fn = function(text)
+      return (text:gsub("%s+$", ""))
+    end },
 }
 #+end_src
 
 Fields:
 - =name= (required) — Display name in the chooser
-- =cmd= (required) — Shell command that reads stdin and writes to stdout
+- =cmd= — Shell command that reads stdin and writes to stdout
+- =fn= — Lua function =function(text) return newText end=
 - =abbrev= (optional) — Short label shown in menubar and alerts (e.g., "CLN", "GPT"). If omitted, no indicator is shown.
 
-The command runs in a login shell (=/bin/zsh -l=) so your full PATH is available.
+Each filter entry must have either =cmd= or =fn=. If both are provided, =fn= takes precedence. The shell command runs in a login shell (=/bin/zsh -l=) so your full PATH is available. A Lua =fn= runs synchronously in the Hammerspoon process; it must return a non-empty string, otherwise the unfiltered text is used and a warning is shown.
 
 ** Writing a Filter Script
 
@@ -258,6 +262,7 @@ print(corrected_text)
 - *Non-zero exit code:* original text is used, warning alert shown with stderr
 - *Empty output:* original text is used
 - *Script hangs:* original text will eventually be used (no timeout currently)
+- *=fn= raises or returns non-string / empty string:* original text is used, warning alert shown
 
 ** Included Script: query-model.py
 

@@ -51,11 +51,90 @@ describe("Filter", function()
       assert.equals("hello", result)
     end)
 
-    it("passes through when filter entry has no cmd", function()
+    it("passes through when filter entry has no cmd or fn", function()
       local result = nil
       local config = { activeFilter = 1, whisperFilters = {{ name = "no cmd" }} }
       Filter.apply("hello", config, logger, function(text) result = text end)
       assert.equals("hello", result)
+    end)
+  end)
+
+  describe("Lua function filter", function()
+    it("returns text transformed by fn", function()
+      local result = nil
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "upper",
+        fn = function(text) return text:upper() end,
+      }} }
+      Filter.apply("hello", config, logger, function(text) result = text end)
+      assert.equals("HELLO", result)
+    end)
+
+    it("logs info on success", function()
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "my fn filter",
+        fn = function(text) return text .. "!" end,
+      }} }
+      Filter.apply("hi", config, logger, function() end)
+
+      assert.is_true(#logger.infos >= 2)
+      assert.is_truthy(logger.infos[1]:match("Applying filter: my fn filter"))
+      assert.is_truthy(logger.infos[2]:match("Filter applied successfully"))
+    end)
+
+    it("prefers fn over cmd when both are present", function()
+      -- If cmd were run, the mock would consume _setNextOutput; we set a
+      -- distinct value so a wrong path would surface.
+      mock_hs.task._setNextOutput(0, "FROM CMD\n", "")
+
+      local result = nil
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "both",
+        cmd = "tr a-z A-Z",
+        fn = function(text) return "FROM FN: " .. text end,
+      }} }
+      Filter.apply("hello", config, logger, function(text) result = text end)
+
+      assert.equals("FROM FN: hello", result)
+    end)
+
+    it("falls back to original text when fn raises", function()
+      local result = nil
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "boom",
+        fn = function(_) error("kaboom") end,
+      }} }
+      Filter.apply("original", config, logger, function(text) result = text end)
+
+      assert.equals("original", result)
+      assert.is_true(#logger.warns > 0)
+      local alerts = mock_hs.alert._getAlerts()
+      assert.is_true(#alerts > 0)
+      assert.is_truthy(alerts[1].message:match("boom"))
+    end)
+
+    it("falls back when fn returns non-string", function()
+      local result = nil
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "wrong-type",
+        fn = function(_) return 42 end,
+      }} }
+      Filter.apply("original", config, logger, function(text) result = text end)
+
+      assert.equals("original", result)
+      assert.is_true(#logger.warns > 0)
+    end)
+
+    it("falls back when fn returns empty string", function()
+      local result = nil
+      local config = { activeFilter = 1, whisperFilters = {{
+        name = "empty-fn",
+        fn = function(_) return "" end,
+      }} }
+      Filter.apply("original", config, logger, function(text) result = text end)
+
+      assert.equals("original", result)
+      assert.is_true(#logger.warns > 0)
     end)
   end)
 
